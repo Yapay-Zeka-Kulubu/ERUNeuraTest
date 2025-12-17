@@ -1,0 +1,15 @@
+# Code Owners
+# Bu dosya, kod bölümleri için sorumlu kişileri tanımlar
+
+# Varsayılan sahipler
+* @Yapay-Zeka-Kulubu
+
+# Kaynak kodu
+/src/ @Yapay-Zeka-Kulubu
+
+# Dokümantasyon
+*.md @Yapay-Zeka-Kulubu
+
+# Konfigürasyon
+requirements.txt @Yapay-Zeka-Kulubu
+pyproject.toml @Yapay-Zeka-Kulubu

@@ -1,3 +1,30 @@
+# Virtual environment
 .venv
+venv/
+
+# Environment variables
 .env
+
+# Output files
 output.jsonl
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
