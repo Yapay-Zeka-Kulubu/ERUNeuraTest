@@ -1,16 +1,17 @@
 # Preprocess Module
 
 Bu modül benchmark projelerini işleyerek her projeden **50 metot** seçer ve JSON formatında çıktı üretir.
+Modülde yazılan sınıf ve metotlar bu readme.md dosyasının altında kısaca açıklanır.
 
 ## Çıktı Formatı
 
-Çıktı dosyası `output/selected_methods/` klasörüne kaydedilir. Her metot için aşağıdaki bilgiler elde edilir:
+Çıktı dosyası `preprocess/selected_methods/` klasörüne kaydedilir. Her metot için aşağıdaki bilgiler elde edilir:
+
 
 ```json
 {
   "project": {
     "name": "project_name",
-    "benchmark_type": "training"
   },
   "file": {
     "name": "file.py",
@@ -57,3 +58,5 @@ Bu modül benchmark projelerini işleyerek her projeden **50 metot** seçer ve J
 - Her projeden **50 metot** seçilir
 - Cyclomatic complexity ve cognitive complexity hesaplanır
 - Risk seviyeleri belirlenir
+
+
