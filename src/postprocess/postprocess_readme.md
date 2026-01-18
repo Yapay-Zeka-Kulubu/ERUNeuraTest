@@ -1,126 +1,189 @@
 # Postprocess Module
 
-Bu modül, **Generation** aşamasından gelen ham test kodlarını **doğrular**, **düzeltir** ve **çalışır hale getirir**.
+Bu modül, **Generation** aşamasından gelen ham test kodlarını **doğrular**, **düzeltir** ve çalışır hale getirir.
 
-## Pipeline Akışı
+## Kullanılacak Kütüphaneler
 
-```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Generation │ ──► │   Postprocess    │ ──► │   Output    │
-│  (Raw Code) │     │ (Fix & Validate) │     │ (Valid Test)│
-└─────────────┘     └──────────────────┘     └─────────────┘
-```
+| Kütüphane | Açıklama | Kurulum |
+|-----------|----------|---------|
+| `ast` | Syntax kontrolü (built-in) | - |
+| `autopep8` | Kod formatlama | `pip install autopep8` |
+| `black` | Kod formatlama | `pip install black` |
+| `isort` | Import sıralama | `pip install isort` |
+| `pytest` | Test çalıştırma | `pip install pytest` |
+| `coverage` | Test coverage | `pip install coverage` |
+| `subprocess` | Process yönetimi (built-in) | - |
 
-## Düzeltme Yaklaşımları
+---
 
-### 1. Rule-Based Fixing (Kural Tabanlı)
+## Sınıf Diyagramı
 
-Otomatik olarak tespit edilip düzeltilebilen hatalar:
-
-| Hata Türü | Düzeltme |
-|-----------|----------|
-| Import eksiklikleri | AST analizi ile otomatik import ekleme |
-| Syntax hataları | Pattern matching ile düzeltme |
-| İndentasyon hataları | Otomatik formatlama |
-| Eksik test decorator | `@pytest.mark` veya `unittest` ekleme |
-
-```python
-class RuleBasedFixer:
-    def fix_imports(self, code: str, method_info: dict) -> str:
-        """Eksik importları tespit edip ekler."""
-        pass
+```mermaid
+classDiagram
+    class BaseFixer {
+        <<abstract>>
+        +fix(code: str, error: str) str*
+        +can_fix(error: str) bool*
+    }
     
-    def fix_syntax(self, code: str) -> str:
-        """Basit syntax hatalarını düzeltir."""
-        pass
+    class SyntaxFixer {
+        +fix(code: str, error: str) str
+        +can_fix(error: str) bool
+    }
     
-    def fix_indentation(self, code: str) -> str:
-        """İndentasyon hatalarını düzeltir."""
-        pass
-```
-
-### 2. LLM Feedback (Geri Besleme)
-
-Kural tabanlı düzeltilemeyen hatalar için LLM'e geri besleme yapılır:
-
-```python
-class LLMFeedbackFixer:
-    def fix_with_error(self, code: str, error: str) -> str:
-        """Hata mesajı ile LLM'den düzeltme ister."""
-        prompt = f"""
-        Aşağıdaki test kodu çalıştırıldığında hata aldı:
-        
-        Kod:
-        {code}
-        
-        Hata:
-        {error}
-        
-        Lütfen kodu düzelt.
-        """
-        return self.llm.invoke(prompt)
-```
-
-## Hata Kontrol Aşamaları
-
-```
-┌─────────────┐
-│  Raw Code   │
-└──────┬──────┘
-       ▼
-┌─────────────┐     ┌─────────────────┐
-│ Syntax      │ ──► │ Rule-Based Fix  │
-│ Check       │     │ (AST Parse)     │
-└──────┬──────┘     └────────┬────────┘
-       ▼                     │
-┌─────────────┐              │
-│ Compile     │ ◄────────────┘
-│ Check       │
-└──────┬──────┘
-       ▼
-┌─────────────┐     ┌─────────────────┐
-│ Runtime     │ ──► │ LLM Feedback    │
-│ Check       │     │ (Error + Code)  │
-└──────┬──────┘     └────────┬────────┘
-       ▼                     │
-┌─────────────┐              │
-│ Valid Test  │ ◄────────────┘
-└─────────────┘
-```
-
-## Retry Mekanizması
-
-> [!WARNING]
-> Maksimum 3 deneme yapılır. Başarısız testler loglanır.
-
-```python
-MAX_RETRIES = 3
-
-def process_test(code: str) -> TestResult:
-    for attempt in range(MAX_RETRIES):
-        # 1. Syntax kontrolü
-        syntax_error = check_syntax(code)
-        if syntax_error:
-            code = rule_based_fix(code, syntax_error)
-            continue
-        
-        # 2. Compile kontrolü
-        compile_error = compile_check(code)
-        if compile_error:
-            code = rule_based_fix(code, compile_error)
-            continue
-        
-        # 3. Runtime kontrolü
-        runtime_error = run_test(code)
-        if runtime_error:
-            code = llm_feedback_fix(code, runtime_error)
-            continue
-        
-        return TestResult(success=True, code=code)
+    class ImportFixer {
+        +fix(code: str, error: str) str
+        +can_fix(error: str) bool
+        +add_import(code: str, module: str) str
+    }
     
-    return TestResult(success=False, code=code)
+    class IndentationFixer {
+        +fix(code: str, error: str) str
+        +can_fix(error: str) bool
+    }
+    
+    class LLMFixer {
+        +llm: BaseLLMProvider
+        +fix(code: str, error: str) str
+        +can_fix(error: str) bool
+    }
+    
+    class CodeValidator {
+        +validate_syntax(code: str) ValidationResult
+        +validate_imports(code: str) ValidationResult
+        +run_test(code: str) TestResult
+    }
+    
+    class FixerChain {
+        +fixers: List~BaseFixer~
+        +fix(code: str, error: str) str
+        +add_fixer(fixer: BaseFixer) None
+    }
+    
+    class PostProcessor {
+        +validator: CodeValidator
+        +fixer_chain: FixerChain
+        +max_retries: int
+        +process(code: str) ProcessResult
+    }
+    
+    BaseFixer <|-- SyntaxFixer
+    BaseFixer <|-- ImportFixer
+    BaseFixer <|-- IndentationFixer
+    BaseFixer <|-- LLMFixer
+    FixerChain o-- BaseFixer
+    PostProcessor o-- CodeValidator
+    PostProcessor o-- FixerChain
 ```
 
-## Çıktı
+---
 
-Başarılı testler `output/validated_tests/` klasörüne kaydedilir.
+## Oluşturulacak Dosyalar
+
+```
+src/postprocess/
+├── __init__.py
+├── fixers/
+│   ├── __init__.py
+│   ├── base.py           # BaseFixer
+│   ├── syntax.py         # SyntaxFixer
+│   ├── imports.py        # ImportFixer
+│   ├── indentation.py    # IndentationFixer
+│   └── llm_fixer.py      # LLMFixer
+├── validator.py          # CodeValidator
+├── chain.py              # FixerChain
+├── processor.py          # PostProcessor
+└── postprocess_readme.md
+```
+
+---
+
+## Hata Düzeltme Akışı
+
+```mermaid
+flowchart TD
+    A[Raw Test Code] --> B{Syntax Check}
+    B -->|Error| C[SyntaxFixer]
+    B -->|OK| D{Import Check}
+    C --> B
+    D -->|Error| E[ImportFixer]
+    D -->|OK| F{Run Test}
+    E --> D
+    F -->|Runtime Error| G[LLMFixer]
+    F -->|Pass| H[Valid Test]
+    G --> F
+    G -->|Max Retries| I[Failed Test]
+```
+
+---
+
+## Docker Entegrasyonu
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY src/postprocess/ ./postprocess/
+COPY benchmark/ ./benchmark/  # Test için gerekli
+
+CMD ["python", "-m", "postprocess.processor"]
+```
+
+```yaml
+# docker-compose.yml
+services:
+  postprocess:
+    build:
+      context: .
+      dockerfile: Dockerfile.postprocess
+    volumes:
+      - ./output/generated_tests:/app/input
+      - ./output/validated_tests:/app/output
+      - ./benchmark:/app/benchmark
+    depends_on:
+      - generation
+```
+
+---
+
+## Tam Pipeline (Docker Compose)
+
+```yaml
+version: '3.8'
+
+services:
+  preprocess:
+    build:
+      dockerfile: Dockerfile.preprocess
+    volumes:
+      - ./benchmark:/app/benchmark
+      - ./output:/app/output
+
+  generation:
+    build:
+      dockerfile: Dockerfile.generation
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    volumes:
+      - ./output:/app/output
+    depends_on:
+      - preprocess
+
+  postprocess:
+    build:
+      dockerfile: Dockerfile.postprocess
+    volumes:
+      - ./output:/app/output
+      - ./benchmark:/app/benchmark
+    depends_on:
+      - generation
+```
+
+**Çalıştırma:**
+```bash
+docker-compose up --build
+```
