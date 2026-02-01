@@ -23,6 +23,7 @@ build/
 .idea/
 .vscode/
 *.swp
+.agent/
 
 # Testing
 .pytest_cache/

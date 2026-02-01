@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  eruneuratest:
+    build: .
+    container_name: eruneuratest
+    volumes:
+      # Kaynak kodu mount et (geliştirme için)
+      - ./src:/app/src:ro
+      - ./examples:/app/examples:ro
+      # Output için yazılabilir volume
+      - ./output:/app/output
+    environment:
+      # API keys (.env dosyasından okunur)
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+    env_file:
+      - .env
+    # Interactive mode için
+    stdin_open: true
+    tty: true
+
+  # Test servisi
+  test:
+    build: .
+    container_name: eruneuratest-test
+    command: pytest -v
+    volumes:
+      - ./src:/app/src:ro
+      - ./examples:/app/examples:ro
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    env_file:
+      - .env

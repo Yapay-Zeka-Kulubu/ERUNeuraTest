@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+venv/
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Agent config (lokal)
+.agent/
+
+# Benchmark data (çok büyük)
+benchmark/
+
+# Output files
+output.jsonl
+output/
+
+# Docs
+*.md
+!readme.md
