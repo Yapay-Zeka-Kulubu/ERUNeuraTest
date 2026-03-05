@@ -6,10 +6,10 @@ from pathlib import Path
 base_path = Path(__file__).parent.parent.parent
 sys.path.append(str(base_path))
 
-from src.preproces.analyzer import ASTAnalyzer
-from src.preproces.complexity import ComplexityCalculator
-from src.preproces.selector import MethodSelector
-from src.preproces.exporter import JSONExporter
+from src.preprocess.analyzer import ASTAnalyzer
+from src.preprocess.complexity import ComplexityCalculator
+from src.preprocess.selector import MethodSelector
+from src.preprocess.exporter import JSONExporter
 
 
 class ProjectScanner:
