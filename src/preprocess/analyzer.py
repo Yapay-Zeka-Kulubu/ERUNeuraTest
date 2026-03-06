@@ -17,7 +17,6 @@ class ASTAnalyzer:
             return None
 
     def get_methods_info(self):
-        #Kod içindeki tüm fonksiyon ve metotları bulup MethodModel listesi döner.
         methods = []
         tree = self._parse_code()       
         if not tree:
@@ -35,7 +34,6 @@ class ASTAnalyzer:
         return methods
 
     def _extract_method(self, node, class_name=None):
-        # Tek bir metot için bilgileri çıkarır
         name = node.name
         signature = self._build_signature(node)
         body = ast.get_source_segment(self.source_code, node) or ""

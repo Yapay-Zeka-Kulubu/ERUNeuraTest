@@ -3,7 +3,6 @@ from typing import List, Optional, Dict, Literal
 
 @dataclass
 class ComplexityMetrics:
-    #Calculator tarafından doldurulan teknik skorlar.
     cyclomatic_complexity: int = 1
     cognitive_complexity: int = 0
     risk_level: Literal["LOW", "MODERATE", "HIGH", "VERY_HIGH"] = "LOW" #Microsoft standlarına göre
@@ -18,22 +17,21 @@ class MethodModel:
     file_path: str                     
     start_line: int                    
     end_line: int                       
-    class_name: Optional[str] = None    # Eğer bir sınıfın içindeyse sınıf adı
+    class_name: Optional[str] = None    
 
-    is_async: bool = False              # 'async def' ise True olur.Fonksiyon 'beklemeli' çalışır 
-    is_method: bool = False             # Bir class'a aitse True 
+    is_async: bool = False              # 'async def' ise true olur.Fonksiyon 'beklemeli' çalışır 
+    is_method: bool = False             
     return_type: Optional[str] = None  
     
-    parameters: List[str] = field(default_factory=list)   # Parametre listesi 
+    parameters: List[str] = field(default_factory=list)  
     dependencies: List[str] = field(default_factory=list) # İçeride çağrılan kütüphaneler (Mocking için)
-    decorators: List[str] = field(default_factory=list)   # @staticmethod, @auth gibi işaretçiler
+    decorators: List[str] = field(default_factory=list)   # @staticmethod, @auth gibi işaretçiler için
     
-    docstring: Optional[str] = None     # Metodun başındaki açıklama 
+    docstring: Optional[str] = None     
     
     complexity: ComplexityMetrics = field(default_factory=ComplexityMetrics)
 
     def to_dict(self) -> Dict:
-        #Modeli gruplandırılmış bir dicte dönüştürür.
         return {
             "project_context": {
                 "project_name": self.module_name,
