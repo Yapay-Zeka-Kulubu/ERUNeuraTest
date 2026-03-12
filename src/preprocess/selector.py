@@ -1,28 +1,38 @@
-class MethodSelector:
-    """
-    Analiz edilen metotlar arasından karmaşıklığa göre
-    en önemli 50 metodu seçen sınıf.
-    """
+"""
+Karmaşıklığa göre en kritik metotları seçen modül.
 
-    def __init__(self, limit=50):
+Metotları (cyclomatic + cognitive) toplam skoruna göre büyükten küçüğe sıralar
+ve en karmaşık N metodu seçer. Varsayılan limit: 50.
+"""
+
+from typing import List
+from .models import MethodModel
+
+
+class MethodSelector:
+    """Complexity skoruna göre en önemli N metodu seçer."""
+
+    def __init__(self, limit: int = 50):
         self.limit = limit
 
-    def select_best_methods(self, methods_with_complexity):
+    def select_best_methods(self, methods: List[MethodModel]) -> List[MethodModel]:
         """
-        Metotları karmaşıklık puanlarına göre sıralar
-        ve ilk 50 tanesini seçer.
+        Metotları karmaşıklık puanına göre sıralar ve ilk N tanesini seçer.
+        Aynı skorlarda satır sayısı fazla olan önceliklidir.
         """
+        ranked = self._rank_by_complexity(methods)
+        return ranked[:self.limit]
 
-        # Metotları hem cyclomatic hem de cognitive complexity toplamına göre
-        # büyükten küçüğe sıralıyoruz
-        sorted_methods = sorted(
-            methods_with_complexity,
-            key=lambda x: (
-                x["complexity"]["cyclomatic_complexity"]
-                + x["complexity"]["cognitive_complexity"]
+    def _rank_by_complexity(self, methods: List[MethodModel]) -> List[MethodModel]:
+        """
+        Metotları toplam complexity skoruna göre büyükten küçüğe sıralar.
+        İkincil kriter: satır sayısı (line_count).
+        """
+        return sorted(
+            methods,
+            key=lambda m: (
+                m.complexity.cyclomatic_complexity + m.complexity.cognitive_complexity,
+                m.line_count,
             ),
             reverse=True,
         )
-
-        # En karmaşık yani test edilmesi en önemli ilk 50 metodu döndürüyoruz
-        return sorted_methods[:self.limit]
