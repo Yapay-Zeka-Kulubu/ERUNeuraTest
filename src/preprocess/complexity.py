@@ -1,76 +1,71 @@
-#ComplexityCalculator modülü metotların karmaşıklık değerlerini hesaplar
+"""
+Cyclomatic ve Cognitive complexity hesaplama modülü.
+
+radon ile cyclomatic, cognitive_complexity kütüphanesi ile cognitive
+complexity hesaplar. Toplam skora göre risk seviyesi belirler
+(LOW / MODERATE / HIGH / VERY_HIGH).
+"""
+
+import ast
 from radon.complexity import cc_visit
 from cognitive_complexity.api import get_cognitive_complexity
+from .models import ComplexityMetrics
+
 
 class ComplexityCalculator:
-    #Metotların karmaşıklık değerlerini hesaplayan sınıf
+    """Metotların karmaşıklık değerlerini hesaplayan sınıf."""
 
-    def calculate(self, source_code):
-        # Kaynak kodu stringe çevir
+    # Risk eşikleri (toplam skor)
+    RISK_THRESHOLDS = [
+        (10, "LOW"),# toplam <= 10
+        (20, "MODERATE"),# toplam <= 20
+        (50, "HIGH"),# toplam <= 50
+    ]
+    DEFAULT_RISK = "VERY_HIGH"# toplam > 50
+
+    def calculate(self, source_code) -> ComplexityMetrics:
+        """Kaynak kod için ComplexityMetrics döner."""
         code_text = self._normalize_code(source_code)
-        
-        # Boş kod kontrolü
+
         if not code_text or code_text.strip() == "":
-            return self._default_result()
-        
+            return ComplexityMetrics()
+
         try:
-            # Cyclomatic Complexity hesapla
-            cc_results = cc_visit(code_text)
-            cc_val = cc_results[0].complexity if cc_results else 1
-            
-            # Cognitive Complexity hesapla
-            cog_val = get_cognitive_complexity(code_text)
-            
-            # Toplam karmaşıklık
+            cc_val = self._calc_cyclomatic(code_text)
+            cog_val = self._calc_cognitive(code_text)
             total = cc_val + cog_val
-            
-            return {
-                "cyclomatic_complexity": cc_val,
-                "cognitive_complexity": cog_val,
-                "risk_levels": {
-                    "overall_risk": self._get_risk_label(total),
-                    "cyclomatic_risk": self._get_cc_risk_label(cc_val)
-                }
-            }
+
+            return ComplexityMetrics(
+                cyclomatic_complexity=cc_val,
+                cognitive_complexity=cog_val,
+                risk_level=self._get_risk_label(total),
+            )
         except Exception:
-            # Hata durumunda varsayılan değerleri döner
-            return self._default_result()
-    
-    def _normalize_code(self, source_code):
-        # String gelirse direkt döner, nesne gelirse body'sini alır
+            return ComplexityMetrics()
+
+    def _calc_cyclomatic(self, code_text: str) -> int:
+        """radon ile cyclomatic complexity hesaplar."""
+        results = cc_visit(code_text)
+        return results[0].complexity if results else 1
+
+    def _calc_cognitive(self, code_text: str) -> int:
+        """cognitive_complexity kütüphanesi ile cognitive complexity hesaplar."""
+        tree = ast.parse(code_text)
+        # İlk fonksiyon düğümünü bul
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return get_cognitive_complexity(node)
+        return 0
+
+    def _normalize_code(self, source_code) -> str:
+        """String veya nesne girdisini string'e normalize eder."""
         if isinstance(source_code, str):
             return source_code
         return getattr(source_code, 'body', str(source_code))
-    
-    def _get_risk_label(self, score):
-        # Toplam skora göre risk seviyesi 
-        if score <= 10:
-            return "Düşük"
-        elif score <= 20:
-            return "Orta"
-        elif score <= 50:
-            return "Yüksek"
-        else:
-            return "Çok Yüksek"
-    
-    def _get_cc_risk_label(self, cc_score):
-        # Cyclomatic skora göre risk seviyesi
-        if cc_score <= 10:
-            return "Düşük"
-        elif cc_score <= 20:
-            return "Orta"
-        elif cc_score <= 50:
-            return "Yüksek"
-        else:
-            return "Çok Yüksek"
-    
-    def _default_result(self):
-        # Hata durumunda dönecek default değerler
-        return {
-            "cyclomatic_complexity": 1,
-            "cognitive_complexity": 0,
-            "risk_levels": {
-                "overall_risk": "Düşük",
-                "cyclomatic_risk": "Düşük"
-            }
-        }
+
+    def _get_risk_label(self, score: int) -> str:
+        """Toplam skora göre risk seviyesi döner."""
+        for threshold, label in self.RISK_THRESHOLDS:
+            if score <= threshold:
+                return label
+        return self.DEFAULT_RISK

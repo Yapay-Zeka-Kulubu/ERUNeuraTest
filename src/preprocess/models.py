@@ -1,61 +1,105 @@
+"""
+Metot ve karmaşıklık verilerini tutan dataclass modelleri.
+
+ComplexityMetrics: Cyclomatic/cognitive complexity ve risk seviyesi.
+MethodModel: Bir metodun tüm yapısal bilgileri (imza, gövde, bağımlılıklar vb.)
+             to_dict() ile JSON-uyumlu formata dönüştürülür.
+"""
+
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Literal
+from pathlib import Path
+
 
 @dataclass
 class ComplexityMetrics:
+    """Bir metodun cyclomatic/cognitive complexity ve risk seviyesini tutar."""
     cyclomatic_complexity: int = 1
     cognitive_complexity: int = 0
-    risk_level: Literal["LOW", "MODERATE", "HIGH", "VERY_HIGH"] = "LOW" #Microsoft standlarına göre
-
-@dataclass
-class MethodModel:
-    name: str                           
-    signature: str                      
-    body: str                          
-
-    module_name: str                   
-    file_path: str                     
-    start_line: int                    
-    end_line: int                       
-    class_name: Optional[str] = None    
-
-    is_async: bool = False              # 'async def' ise true olur.Fonksiyon 'beklemeli' çalışır 
-    is_method: bool = False             
-    return_type: Optional[str] = None  
-    
-    parameters: List[str] = field(default_factory=list)  
-    dependencies: List[str] = field(default_factory=list) # İçeride çağrılan kütüphaneler (Mocking için)
-    decorators: List[str] = field(default_factory=list)   # @staticmethod, @auth gibi işaretçiler için
-    
-    docstring: Optional[str] = None     
-    
-    complexity: ComplexityMetrics = field(default_factory=ComplexityMetrics)
+    risk_levels: Literal["LOW", "MODERATE", "HIGH", "VERY_HIGH"] = "LOW"
 
     def to_dict(self) -> Dict:
         return {
-            "project_context": {
-                "project_name": self.module_name,
-                "file_path": self.file_path
+            "cyclomatic_complexity": self.cyclomatic_complexity,
+            "cognitive_complexity": self.cognitive_complexity,
+            "risk_levels": {"overall_risk": self.risk_levels},
+        }
+
+
+@dataclass
+class MethodModel:
+    """Bir Python metodunun tüm yapısal bilgilerini tutan veri modeli."""
+
+    # Temel bilgiler
+    name: str
+    signature: str
+    body: str
+
+    # Konum bilgileri
+    module_name: str
+    file_path: str
+    start_line: int
+    end_line: int
+    class_name: Optional[str] = None
+
+    # Metot özellikleri
+    is_async: bool = False
+    is_method: bool = False
+    return_type: Optional[str] = None
+
+    # Yapısal bilgiler
+    parameters: List[str] = field(default_factory=list)
+    dependencies: List[str] = field(default_factory=list)
+    decorators: List[str] = field(default_factory=list)
+
+    docstring: Optional[str] = None
+    complexity: ComplexityMetrics = field(default_factory=ComplexityMetrics)
+
+    @property
+    def file_name(self) -> str:
+        """Dosya yolundan sadece dosya adını döner."""
+        return Path(self.file_path).name
+
+    @property
+    def fqn(self) -> Optional[str]:
+        """Fully Qualified Name: module.ClassName veya None."""
+        if self.class_name:
+            return f"{self.module_name}.{self.class_name}"
+        return None
+
+    @property
+    def line_count(self) -> int:
+        """Metodun satır sayısını hesaplar."""
+        return self.end_line - self.start_line + 1
+
+    def to_dict(self) -> Dict:
+        """JSON formatına uygun sözlük döner."""
+        return {
+            "project": {
+                "name": self.module_name,
             },
-            "class_info": {
+            "file": {
+                "name": self.file_name,
+                "path": self.file_path,
+            },
+            "class": {
                 "name": self.class_name,
-                "is_method": self.is_method
+                "fqn": self.fqn,
             },
-            "method_details": {
+            "method": {
                 "name": self.name,
-                "is_async": self.is_async,
-                "return_type": self.return_type,
-                "parameters": self.parameters,
                 "signature": self.signature,
                 "body": self.body,
-                "docstring": self.docstring,
-                "lines": {"start": self.start_line, "end": self.end_line},
+                "start_line": self.start_line,
+                "end_line": self.end_line,
+                "line_count": self.line_count,
+                "is_async": self.is_async,
+                "is_method": self.is_method,
+                "return_type": self.return_type,
+                "parameters": self.parameters,
                 "dependencies": self.dependencies,
-                "decorators": self.decorators
+                "decorators": self.decorators,
+                "docstring": self.docstring,
             },
-            "analysis_metrics": {
-                "cyclomatic_complexity": self.complexity.cyclomatic_complexity,
-                "cognitive_complexity": self.complexity.cognitive_complexity,
-                "risk_level": self.complexity.risk_level
-            }
+            "complexity": self.complexity.to_dict(),
         }

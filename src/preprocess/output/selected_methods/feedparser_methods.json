@@ -1,0 +1,2353 @@
+[
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "convert_to_utf8",
+      "signature": "def convert_to_utf8(http_headers: dict[str, str], data: bytes, result: dict[str, typing.Any]) -> bytes",
+      "body": "def convert_to_utf8(\n    http_headers: dict[str, str], data: bytes, result: dict[str, typing.Any]\n) -> bytes:\n    \"\"\"Detect and convert the character encoding to UTF-8.\"\"\"\n\n    # This is so much trickier than it sounds, it's not even funny.\n    # According to RFC 3023 ('XML Media Types'), if the HTTP Content-Type\n    # is application/xml, application/*+xml,\n    # application/xml-external-parsed-entity, or application/xml-dtd,\n    # the encoding given in the charset parameter of the HTTP Content-Type\n    # takes precedence over the encoding given in the XML prefix within the\n    # document, and defaults to 'utf-8' if neither are specified.  But, if\n    # the HTTP Content-Type is text/xml, text/*+xml, or\n    # text/xml-external-parsed-entity, the encoding given in the XML prefix\n    # within the document is ALWAYS IGNORED and only the encoding given in\n    # the charset parameter of the HTTP Content-Type header should be\n    # respected, and it defaults to 'us-ascii' if not specified.\n\n    # Furthermore, discussion on the atom-syntax mailing list with the\n    # author of RFC 3023 leads me to the conclusion that any document\n    # served with a Content-Type of text/* and no charset parameter\n    # must be treated as us-ascii.  (We now do this.)  And also that it\n    # must always be flagged as non-well-formed.  (We now do this too.)\n\n    # If Content-Type is unspecified (input was local file or non-HTTP source)\n    # or unrecognized (server just got it totally wrong), then go by the\n    # encoding given in the XML prefix of the document and default to\n    # 'iso-8859-1' as per the HTTP specification (RFC 2616).\n\n    # Then, assuming we didn't find a character encoding in the HTTP headers\n    # (and the HTTP Content-type allowed us to look in the body), we need\n    # to sniff the first few bytes of the XML data and try to determine\n    # whether the encoding is ASCII-compatible.  Section F of the XML\n    # specification shows the way here:\n    # http://www.w3.org/TR/REC-xml/#sec-guessing-no-ext-info\n\n    # If the sniffed encoding is not ASCII-compatible, we need to make it\n    # ASCII compatible so that we can sniff further into the XML declaration\n    # to find the encoding attribute, which will tell us the true encoding.\n\n    # Of course, none of this guarantees that we will be able to parse the\n    # feed in the declared character encoding (assuming it was declared\n    # correctly, which many are not).\n\n    bom_encoding = \"\"\n    xml_encoding = \"\"\n\n    # Look at the first few bytes of the document to guess what\n    # its encoding may be. We only need to decode enough of the\n    # document that we can use an ASCII-compatible regular\n    # expression to search for an XML encoding declaration.\n    # The heuristic follows the XML specification, section F:\n    # http://www.w3.org/TR/REC-xml/#sec-guessing-no-ext-info\n    # Check for BOMs first.\n    if data[:4] == codecs.BOM_UTF32_BE:\n        bom_encoding = \"utf-32be\"\n        data = data[4:]\n    elif data[:4] == codecs.BOM_UTF32_LE:\n        bom_encoding = \"utf-32le\"\n        data = data[4:]\n    elif data[:2] == codecs.BOM_UTF16_BE and data[2:4] != ZERO_BYTES:\n        bom_encoding = \"utf-16be\"\n        data = data[2:]\n    elif data[:2] == codecs.BOM_UTF16_LE and data[2:4] != ZERO_BYTES:\n        bom_encoding = \"utf-16le\"\n        data = data[2:]\n    elif data[:3] == codecs.BOM_UTF8:\n        bom_encoding = \"utf-8\"\n        data = data[3:]\n    # Check for the characters '<?xm' in several encodings.\n    elif data[:4] == EBCDIC_MARKER:\n        bom_encoding = \"cp037\"\n    elif data[:4] == UTF16BE_MARKER:\n        bom_encoding = \"utf-16be\"\n    elif data[:4] == UTF16LE_MARKER:\n        bom_encoding = \"utf-16le\"\n    elif data[:4] == UTF32BE_MARKER:\n        bom_encoding = \"utf-32be\"\n    elif data[:4] == UTF32LE_MARKER:\n        bom_encoding = \"utf-32le\"\n\n    tempdata = data\n    try:\n        if bom_encoding:\n            tempdata = data.decode(bom_encoding).encode(\"utf-8\")\n    except UnicodeDecodeError:\n        xml_encoding_match = None\n    else:\n        xml_encoding_match = RE_XML_PI_ENCODING.match(tempdata)\n\n    if xml_encoding_match:\n        xml_encoding = xml_encoding_match.groups()[0].decode(\"utf-8\").lower()\n        # Normalize the xml_encoding if necessary.\n        if bom_encoding and (\n            xml_encoding\n            in (\n                \"u16\",\n                \"utf-16\",\n                \"utf16\",\n                \"utf_16\",\n                \"u32\",\n                \"utf-32\",\n                \"utf32\",\n                \"utf_32\",\n                \"iso-10646-ucs-2\",\n                \"iso-10646-ucs-4\",\n                \"csucs4\",\n                \"csunicode\",\n                \"ucs-2\",\n                \"ucs-4\",\n            )\n        ):\n            xml_encoding = bom_encoding\n\n    # Find the HTTP Content-Type and, hopefully, a character\n    # encoding provided by the server. The Content-Type is used\n    # to choose the \"correct\" encoding among the BOM encoding,\n    # XML declaration encoding, and HTTP encoding, following the\n    # heuristic defined in RFC 3023.\n    http_content_type = http_headers.get(\"content-type\") or \"\"\n    http_content_type, http_encoding = parse_content_type(http_content_type)\n\n    acceptable_content_type = 0\n    application_content_types = (\n        \"application/xml\",\n        \"application/xml-dtd\",\n        \"application/xml-external-parsed-entity\",\n    )\n    text_content_types = (\"text/xml\", \"text/xml-external-parsed-entity\")\n    json_content_types = (\"application/feed+json\", \"application/json\")\n    json = False\n    if http_content_type in application_content_types or (\n        http_content_type.startswith(\"application/\")\n        and http_content_type.endswith(\"+xml\")\n    ):\n        acceptable_content_type = 1\n        rfc3023_encoding = http_encoding or xml_encoding or \"utf-8\"\n    elif http_content_type in text_content_types or (\n        http_content_type.startswith(\"text/\") and http_content_type.endswith(\"+xml\")\n    ):\n        acceptable_content_type = 1\n        rfc3023_encoding = http_encoding or \"us-ascii\"\n    elif http_content_type in json_content_types or (\n        not http_content_type and data and data.lstrip().startswith(b\"{\")\n    ):\n        http_content_type = json_content_types[0]\n        acceptable_content_type = 1\n        json = True\n        rfc3023_encoding = http_encoding or \"utf-8\"  # RFC 7159, 8.1.\n    elif http_content_type.startswith(\"text/\"):\n        rfc3023_encoding = http_encoding or \"us-ascii\"\n    elif http_headers and \"content-type\" not in http_headers:\n        rfc3023_encoding = xml_encoding or \"iso-8859-1\"\n    else:\n        rfc3023_encoding = xml_encoding or \"utf-8\"\n    # gb18030 is a superset of gb2312, so always replace gb2312\n    # with gb18030 for greater compatibility.\n    if rfc3023_encoding.lower() == \"gb2312\":\n        rfc3023_encoding = \"gb18030\"\n    if xml_encoding.lower() == \"gb2312\":\n        xml_encoding = \"gb18030\"\n\n    # there are four encodings to keep track of:\n    # - http_encoding is the encoding declared in the Content-Type HTTP header\n    # - xml_encoding is the encoding declared in the <?xml declaration\n    # - bom_encoding is the encoding sniffed from the first 4 bytes of the XML data\n    # - rfc3023_encoding is the actual encoding, as per RFC 3023\n    #   and a variety of other conflicting specifications\n    error: FeedparserError | None = None\n\n    if http_headers and (not acceptable_content_type):\n        if \"content-type\" in http_headers:\n            msg = \"%s is not an accepted media type\" % http_headers[\"content-type\"]\n        else:\n            msg = \"no Content-type specified\"\n        error = NonXMLContentType(msg)\n\n    # determine character encoding\n    known_encoding = False\n    tried_encodings = []\n    # try: HTTP encoding, declared XML encoding, encoding sniffed from BOM\n    for encoding_to_try in (\n        rfc3023_encoding,\n        xml_encoding,\n        bom_encoding,\n        lazy_chardet_encoding,\n        \"utf-8\",\n        \"windows-1252\",\n        \"iso-8859-2\",\n    ):\n        if callable(encoding_to_try):\n            proposed_encoding = encoding_to_try(data)\n        else:\n            proposed_encoding = encoding_to_try\n        if not proposed_encoding:\n            continue\n        if proposed_encoding in tried_encodings:\n            continue\n        tried_encodings.append(proposed_encoding)\n        try:\n            text = data.decode(proposed_encoding)\n        except (UnicodeDecodeError, LookupError):\n            continue\n\n        known_encoding = True\n        if not json:\n            # Update the encoding in the opening XML processing instruction.\n            new_declaration = \"\"\"<?xml version='1.0' encoding='utf-8'?>\"\"\"\n            if RE_XML_DECLARATION.search(text):\n                text = RE_XML_DECLARATION.sub(new_declaration, text)\n            else:\n                text = new_declaration + \"\\n\" + text\n        data = text.encode(\"utf-8\")\n        break\n\n    # if still no luck, give up\n    if not known_encoding:\n        error = CharacterEncodingUnknown(\n            \"document encoding unknown, I tried \"\n            + \"%s, %s, utf-8, windows-1252, and iso-8859-2 but nothing worked\"\n            % (rfc3023_encoding, xml_encoding)\n        )\n        rfc3023_encoding = \"\"\n    elif proposed_encoding != rfc3023_encoding:\n        error = CharacterEncodingOverride(\n            \"document declared as %s, but parsed as %s\"\n            % (rfc3023_encoding, proposed_encoding)\n        )\n        rfc3023_encoding = proposed_encoding\n\n    result[\"content-type\"] = http_content_type  # for selecting the parser\n    result[\"encoding\"] = rfc3023_encoding\n    if error:\n        result[\"bozo\"] = True\n        result[\"bozo_exception\"] = error\n    return data",
+      "start_line": 99,
+      "end_line": 334,
+      "line_count": 236,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "bytes",
+      "parameters": [
+        "http_headers",
+        "data",
+        "result"
+      ],
+      "dependencies": [
+        "startswith",
+        "groups",
+        "parse_content_type",
+        "sub",
+        "get",
+        "append",
+        "decode",
+        "search",
+        "NonXMLContentType",
+        "match",
+        "lower",
+        "endswith",
+        "encoding_to_try",
+        "lstrip",
+        "CharacterEncodingOverride",
+        "callable",
+        "encode",
+        "CharacterEncodingUnknown"
+      ],
+      "decorators": [],
+      "docstring": "Detect and convert the character encoding to UTF-8."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "pop",
+      "signature": "def pop(self, element, strip_whitespace=1)",
+      "body": "def pop(self, element, strip_whitespace=1):\n        if not self.elementstack:\n            return\n        if self.elementstack[-1][0] != element:\n            return\n\n        element, expecting_text, pieces = self.elementstack.pop()\n\n        # Ensure each piece is a str for Python 3\n        for i, v in enumerate(pieces):\n            if isinstance(v, bytes):\n                pieces[i] = v.decode(\"utf-8\")\n\n        if (\n            self.version == \"atom10\"\n            and self.contentparams.get(\"type\", \"text\") == \"application/xhtml+xml\"\n        ):\n            # remove enclosing child element, but only if it is a <div> and\n            # only if all the remaining content is nested underneath it.\n            # This means that the divs would be retained in the following:\n            #    <div>foo</div><div>bar</div>\n            while pieces and len(pieces) > 1 and not pieces[-1].strip():\n                del pieces[-1]\n            while pieces and len(pieces) > 1 and not pieces[0].strip():\n                del pieces[0]\n            if (\n                pieces\n                and (pieces[0] == \"<div>\" or pieces[0].startswith(\"<div \"))\n                and pieces[-1] == \"</div>\"\n            ):\n                depth = 0\n                for piece in pieces[:-1]:\n                    if piece.startswith(\"</\"):\n                        depth -= 1\n                        if depth == 0:\n                            break\n                    elif piece.startswith(\"<\") and not piece.endswith(\"/>\"):\n                        depth += 1\n                else:\n                    pieces = pieces[1:-1]\n\n        output = \"\".join(pieces)\n        if strip_whitespace:\n            output = output.strip()\n        if not expecting_text:\n            return output\n\n        # decode base64 content\n        if base64 and self.contentparams.get(\"base64\", 0):\n            try:\n                output = base64.decodebytes(output.encode(\"utf8\")).decode(\"utf8\")\n            except (binascii.Error, binascii.Incomplete, UnicodeDecodeError):\n                pass\n\n        # resolve relative URIs\n        if (element in self.can_be_relative_uri) and output:\n            # do not resolve guid elements with isPermalink=\"false\"\n            if not element == \"id\" or self.guidislink:\n                output = self.resolve_uri(output)\n\n        # decode entities within embedded markup\n        if not self.contentparams.get(\"base64\", 0):\n            output = self.decode_entities(element, output)\n\n        # some feed formats require consumers to guess\n        # whether the content is html or plain text\n        if (\n            not self.version.startswith(\"atom\")\n            and self.contentparams.get(\"type\") == \"text/plain\"\n        ):\n            if self.looks_like_html(output):\n                self.contentparams[\"type\"] = \"text/html\"\n\n        # remove temporary cruft from contentparams\n        try:\n            del self.contentparams[\"mode\"]\n        except KeyError:\n            pass\n        try:\n            del self.contentparams[\"base64\"]\n        except KeyError:\n            pass\n\n        is_htmlish = (\n            self.map_content_type(self.contentparams.get(\"type\", \"text/html\"))\n            in self.html_types\n        )\n        # resolve relative URIs within embedded markup\n        if is_htmlish and self.resolve_relative_uris:\n            if element in self.can_contain_relative_uris:\n                output = resolve_relative_uris(\n                    output,\n                    self.baseuri,\n                    self.encoding,\n                    self.contentparams.get(\"type\", \"text/html\"),\n                )\n\n        # sanitize embedded markup\n        if is_htmlish and self.sanitize_html:\n            if element in self.can_contain_dangerous_markup:\n                output = sanitize_html(\n                    output, self.encoding, self.contentparams.get(\"type\", \"text/html\")\n                )\n\n        if self.encoding and isinstance(output, bytes):\n            output = output.decode(self.encoding, \"ignore\")\n\n        # address common error where people take data that is already\n        # utf-8, presume that it is iso-8859-1, and re-encode it.\n        if self.encoding in (\"utf-8\", \"utf-8_INVALID_PYTHON_3\") and not isinstance(\n            output, bytes\n        ):\n            try:\n                output = output.encode(\"iso-8859-1\").decode(\"utf-8\")\n            except (UnicodeEncodeError, UnicodeDecodeError):\n                pass\n\n        # map win-1252 extensions to the proper code points\n        if not isinstance(output, bytes):\n            output = output.translate(_cp1252)\n\n        # categories/tags/keywords/whatever are handled in _end_category or\n        # _end_tags or _end_itunes_keywords\n        if element in (\"category\", \"tags\", \"itunes_keywords\"):\n            return output\n\n        if element == \"title\" and -1 < self.title_depth <= self.depth:\n            return output\n\n        # store output in appropriate place(s)\n        if self.inentry and not self.insource:\n            if element == \"content\":\n                self.entries[-1].setdefault(element, [])\n                contentparams = copy.deepcopy(self.contentparams)\n                contentparams[\"value\"] = output\n                self.entries[-1][element].append(contentparams)\n            elif element == \"link\":\n                if not self.inimage:\n                    # query variables in urls in link elements are improperly\n                    # converted from `?a=1&b=2` to `?a=1&b;=2` as if they're\n                    # unhandled character references. fix this special case.\n                    output = output.replace(\"&amp;\", \"&\")\n                    output = re.sub(\"&([A-Za-z0-9_]+);\", r\"&\\g<1>\", output)\n                    if self.isentrylink or not self.entries[-1].get(element):\n                        self.entries[-1][element] = output\n                    if output:\n                        self.entries[-1][\"links\"][-1][\"href\"] = output\n            else:\n                if element == \"description\":\n                    element = \"summary\"\n                old_value_depth = self.property_depth_map.setdefault(\n                    self.entries[-1], {}\n                ).get(element)\n                if old_value_depth is None or self.depth <= old_value_depth:\n                    self.property_depth_map[self.entries[-1]][element] = self.depth\n                    self.entries[-1][element] = output\n                if self.incontent:\n                    contentparams = copy.deepcopy(self.contentparams)\n                    contentparams[\"value\"] = output\n                    self.entries[-1][element + \"_detail\"] = contentparams\n        elif (\n            self.infeed or self.insource\n        ):  # and (not self.intextinput) and (not self.inimage):\n            context = self._get_context()\n            if element == \"description\":\n                element = \"subtitle\"\n            context[element] = output\n            if element == \"link\":\n                # fix query variables; see above for the explanation\n                output = re.sub(\"&([A-Za-z0-9_]+);\", r\"&\\g<1>\", output)\n                context[element] = output\n                context[\"links\"][-1][\"href\"] = output\n            elif self.incontent:\n                contentparams = copy.deepcopy(self.contentparams)\n                contentparams[\"value\"] = output\n                context[element + \"_detail\"] = contentparams\n        return output",
+      "start_line": 481,
+      "end_line": 657,
+      "line_count": 177,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "element",
+        "strip_whitespace"
+      ],
+      "dependencies": [
+        "looks_like_html",
+        "isinstance",
+        "resolve_uri",
+        "_get_context",
+        "sub",
+        "len",
+        "replace",
+        "decode",
+        "resolve_relative_uris",
+        "join",
+        "endswith",
+        "deepcopy",
+        "encode",
+        "decodebytes",
+        "setdefault",
+        "strip",
+        "get",
+        "append",
+        "decode_entities",
+        "map_content_type",
+        "translate",
+        "startswith",
+        "pop",
+        "enumerate",
+        "sanitize_html"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "api"
+    },
+    "file": {
+      "name": "api.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\api.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_file_inplace",
+      "signature": "def _parse_file_inplace(file: IO[bytes] | IO[str], result: dict, *, resolve_relative_uris: bool | None=None, sanitize_html: bool | None=None, optimistic_encoding_detection: bool | None=None) -> None",
+      "body": "def _parse_file_inplace(\n    file: IO[bytes] | IO[str],\n    result: dict,\n    *,\n    resolve_relative_uris: bool | None = None,\n    sanitize_html: bool | None = None,\n    optimistic_encoding_detection: bool | None = None,\n) -> None:\n    # Avoid a cyclic import.\n    import feedparser\n\n    if sanitize_html is None:\n        sanitize_html = bool(feedparser.SANITIZE_HTML)\n    if resolve_relative_uris is None:\n        resolve_relative_uris = bool(feedparser.RESOLVE_RELATIVE_URIS)\n    if optimistic_encoding_detection is None:\n        optimistic_encoding_detection = bool(feedparser.OPTIMISTIC_ENCODING_DETECTION)\n\n    stream_factory = convert_file_to_utf8(\n        result[\"headers\"], file, result, optimistic_encoding_detection\n    )\n    # We're done with file, all access must happen through stream_factory.\n    del file\n\n    # Some notes about the stream_factory.get_{text,binary}_file() methods:\n    #\n    # Calling them a second time will raise io.UnsupportedOperation\n    # if the underlying file was not seekable.\n    #\n    # Calling close() on the returned file is ignored\n    # (that is, the underlying file is *not* closed),\n    # because the SAX parser closes the file when done;\n    # we don't want that, since we might try again with the loose parser.\n\n    use_json_parser = False\n    if result[\"content-type\"] in {\"application/json\", \"application/feed+json\"}:\n        use_json_parser = True\n    use_strict_parser = bool(result[\"encoding\"])\n\n    result[\"version\"], stream_factory.prefix, entities = replace_doctype(\n        stream_factory.prefix\n    )\n\n    # Ensure that baseuri is an absolute URI using an acceptable URI scheme.\n    contentloc = result[\"headers\"].get(\"content-location\", \"\")\n    href = result.get(\"href\", \"\")\n    baseuri = (\n        make_safe_absolute_uri(href, contentloc)\n        or make_safe_absolute_uri(contentloc)\n        or href\n    )\n\n    baselang = result[\"headers\"].get(\"content-language\", None)\n    if isinstance(baselang, bytes) and baselang is not None:\n        baselang = baselang.decode(\"utf-8\", \"ignore\")\n\n    if not _XML_AVAILABLE:\n        use_strict_parser = False\n\n    feed_parser: JSONParser | StrictFeedParser | LooseFeedParser\n\n    if use_strict_parser and not use_json_parser:\n        # Initialize the SAX parser.\n        feed_parser = StrictFeedParser(baseuri, baselang, \"utf-8\")\n        feed_parser.resolve_relative_uris = resolve_relative_uris\n        feed_parser.sanitize_html = sanitize_html\n        saxparser = xml.sax.make_parser(PREFERRED_XML_PARSERS)\n        saxparser.setFeature(xml.sax.handler.feature_namespaces, 1)\n        try:\n            # Disable downloading external doctype references, if possible.\n            saxparser.setFeature(xml.sax.handler.feature_external_ges, 0)\n        except xml.sax.SAXNotSupportedException:\n            pass\n        saxparser.setContentHandler(feed_parser)\n        saxparser.setErrorHandler(feed_parser)  # type: ignore[arg-type]\n        source = xml.sax.xmlreader.InputSource()\n\n        # If an encoding was detected, decode the file on the fly;\n        # otherwise, pass it as-is and let the SAX parser deal with it.\n        try:\n            source.setCharacterStream(stream_factory.get_text_file())\n        except MissingEncoding:\n            source.setByteStream(stream_factory.get_binary_file())\n\n        try:\n            saxparser.parse(source)\n        except xml.sax.SAXException as e:\n            result[\"bozo\"] = 1\n            result[\"bozo_exception\"] = feed_parser.exc or e\n            use_strict_parser = False\n\n    # The loose XML parser will be tried if the strict XML parser was not used\n    # (or if it failed to parse the feed).\n    if not use_strict_parser and not use_json_parser:\n        feed_parser = LooseFeedParser(baseuri, baselang, \"utf-8\", entities)\n        feed_parser.resolve_relative_uris = resolve_relative_uris\n        feed_parser.sanitize_html = sanitize_html\n\n        # If an encoding was detected, use it; otherwise, assume utf-8 and do your best.\n        # Will raise io.UnsupportedOperation if the underlying file is not seekable.\n        data = stream_factory.get_text_file(\"utf-8\", \"replace\").read()\n\n        # As of 6.0.8, LooseFeedParser.feed() can be called exactly once\n        # with the entire data (it does some re.sub() and str.replace() on it).\n        #\n        # SGMLParser (of which LooseFeedParser is a subclass)\n        # *can* be fed in a streaming fashion,\n        # by calling feed() repeatedly with chunks of text.\n        #\n        # When/if LooseFeedParser will support being fed chunks,\n        # replace the read() call above with read(size)/feed() calls in a loop.\n\n        feed_parser.feed(data)\n\n        # If parsing with the loose XML parser resulted in no information,\n        # flag that the JSON parser should be tried.\n        if not (feed_parser.entries or feed_parser.feeddata or feed_parser.version):\n            use_json_parser = True\n\n    if use_json_parser:\n        result[\"version\"] = None\n        feed_parser = JSONParser(baseuri, baselang, \"utf-8\")\n        try:\n            feed_parser.feed(stream_factory.get_file())\n        except Exception as e:\n            result[\"bozo\"] = 1\n            result[\"bozo_exception\"] = e\n\n    result[\"feed\"] = feed_parser.feeddata\n    result[\"entries\"] = feed_parser.entries\n    result[\"version\"] = result[\"version\"] or feed_parser.version\n    if isinstance(feed_parser, JSONParser):\n        result[\"namespaces\"] = {}\n    else:\n        result[\"namespaces\"] = feed_parser.namespaces_in_use",
+      "start_line": 242,
+      "end_line": 376,
+      "line_count": 135,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "None",
+      "parameters": [
+        "file",
+        "result"
+      ],
+      "dependencies": [
+        "read",
+        "setContentHandler",
+        "isinstance",
+        "bool",
+        "get_file",
+        "setFeature",
+        "convert_file_to_utf8",
+        "feed",
+        "get_text_file",
+        "decode",
+        "InputSource",
+        "setErrorHandler",
+        "LooseFeedParser",
+        "JSONParser",
+        "get",
+        "get_binary_file",
+        "setCharacterStream",
+        "replace_doctype",
+        "parse",
+        "make_parser",
+        "setByteStream",
+        "make_safe_absolute_uri",
+        "StrictFeedParser"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "rfc822"
+    },
+    "file": {
+      "name": "rfc822.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\rfc822.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_rfc822",
+      "signature": "def _parse_date_rfc822(date)",
+      "body": "def _parse_date_rfc822(date):\n    \"\"\"Parse RFC 822 dates and times\n    http://tools.ietf.org/html/rfc822#section-5\n\n    There are some formatting differences that are accounted for:\n    1. Years may be two or four digits.\n    2. The month and day can be swapped.\n    3. Additional timezone names are supported.\n    4. A default time and timezone are assumed if only a date is present.\n\n    :param str date: a date/time string that will be converted to a time tuple\n    :returns: a UTC time tuple, or None\n    :rtype: time.struct_time | None\n    \"\"\"\n\n    parts = date.lower().split()\n    if len(parts) < 5:\n        # Assume that the time and timezone are missing\n        parts.extend((\"00:00:00\", \"0000\"))\n    # Remove the day name\n    if parts[0][:3] in day_names:\n        # Comma without spaces:\n        # 'Fri,24 Nov 2023 18:28:36 -0000'\n        if \",\" in parts[0] and parts[0][-1] != \",\":\n            parts.insert(1, parts[0].rpartition(\",\")[2])\n        parts = parts[1:]\n    if len(parts) < 5:\n        # If there are still fewer than five parts, there's not enough\n        # information to interpret this.\n        return None\n\n    # Handle the day and month name.\n    month = months.get(parts[1][:3])\n    try:\n        day = int(parts[0])\n    except ValueError:\n        # Check if the day and month are swapped.\n        if months.get(parts[0][:3]):\n            try:\n                day = int(parts[1])\n            except ValueError:\n                return None\n            month = months.get(parts[0][:3])\n        else:\n            return None\n    if not month:\n        return None\n\n    # Handle the year.\n    try:\n        year = int(parts[2])\n    except ValueError:\n        return None\n    # Normalize two-digit years:\n    # Anything in the 90's is interpreted as 1990 and on.\n    # Anything 89 or less is interpreted as 2089 or before.\n    if len(parts[2]) <= 2:\n        year += (1900, 2000)[year < 90]\n\n    # Handle the time (default to 00:00:00).\n    time_parts = parts[3].split(\":\")\n    time_parts.extend((\"0\",) * (3 - len(time_parts)))\n    try:\n        (hour, minute, second) = (int(i) for i in time_parts)\n    except ValueError:\n        return None\n\n    # Handle the timezone information, if any (default to +0000).\n    # Strip 'Etc/' from the timezone.\n    if parts[4].startswith(\"etc/\"):\n        parts[4] = parts[4][4:]\n    # Normalize timezones that start with 'gmt':\n    # GMT-05:00 => -0500\n    # GMT => GMT\n    if parts[4].startswith(\"gmt\"):\n        parts[4] = \"\".join(parts[4][3:].split(\":\")) or \"gmt\"\n    # Handle timezones like '-0500', '+0500', and 'EST'\n    if parts[4] and parts[4][0] in (\"-\", \"+\"):\n        try:\n            if \":\" in parts[4]:\n                timezone_hours = int(parts[4][1:3])\n                timezone_minutes = int(parts[4][4:])\n            else:\n                timezone_hours = int(parts[4][1:3])\n                timezone_minutes = int(parts[4][3:])\n        except ValueError:\n            return None\n        if parts[4].startswith(\"-\"):\n            timezone_hours *= -1\n            timezone_minutes *= -1\n    else:\n        timezone_hours = timezone_names.get(parts[4], 0)\n        timezone_minutes = 0\n\n    # Create the datetime object and timezone delta objects\n    try:\n        stamp = datetime.datetime(year, month, day, hour, minute, second)\n    except ValueError:\n        return None\n    delta = datetime.timedelta(0, 0, 0, 0, timezone_minutes, timezone_hours)\n\n    # Return the date and timestamp in a UTC 9-tuple\n    try:\n        return (stamp - delta).utctimetuple()\n    except (OverflowError, ValueError):\n        # IronPython throws ValueErrors instead of OverflowErrors\n        return None",
+      "start_line": 73,
+      "end_line": 179,
+      "line_count": 107,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "date"
+      ],
+      "dependencies": [
+        "startswith",
+        "datetime",
+        "insert",
+        "len",
+        "int",
+        "get",
+        "timedelta",
+        "lower",
+        "extend",
+        "utctimetuple",
+        "join",
+        "rpartition",
+        "split"
+      ],
+      "decorators": [],
+      "docstring": "Parse RFC 822 dates and times\nhttp://tools.ietf.org/html/rfc822#section-5\n\nThere are some formatting differences that are accounted for:\n1. Years may be two or four digits.\n2. The month and day can be swapped.\n3. Additional timezone names are supported.\n4. A default time and timezone are assumed if only a date is present.\n\n:param str date: a date/time string that will be converted to a time tuple\n:returns: a UTC time tuple, or None\n:rtype: time.struct_time | None"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "unknown_starttag",
+      "signature": "def unknown_starttag(self, tag, attrs)",
+      "body": "def unknown_starttag(self, tag, attrs):\n        # increment depth counter\n        self.depth += 1\n\n        # normalize attrs\n        attrs = [self._normalize_attributes(attr) for attr in attrs]\n\n        # track xml:base and xml:lang\n        attrs_d = dict(attrs)\n        baseuri = attrs_d.get(\"xml:base\", attrs_d.get(\"base\")) or self.baseuri\n        if isinstance(baseuri, bytes):\n            baseuri = baseuri.decode(self.encoding, \"ignore\")\n        # ensure that self.baseuri is always an absolute URI that\n        # uses a whitelisted URI scheme (e.g. not `javascript:`)\n        if self.baseuri:\n            self.baseuri = make_safe_absolute_uri(self.baseuri, baseuri) or self.baseuri\n        else:\n            self.baseuri = _urljoin(self.baseuri, baseuri)\n        lang = attrs_d.get(\"xml:lang\", attrs_d.get(\"lang\"))\n        if lang == \"\":\n            # xml:lang could be explicitly set to '', we need to capture that\n            lang = None\n        elif lang is None:\n            # if no xml:lang is specified, use parent lang\n            lang = self.lang\n        if lang:\n            if tag in (\"feed\", \"rss\", \"rdf:RDF\"):\n                self.feeddata[\"language\"] = lang.replace(\"_\", \"-\")\n        self.lang = lang\n        self.basestack.append(self.baseuri)\n        self.langstack.append(lang)\n\n        # track namespaces\n        for prefix, uri in attrs:\n            if prefix.startswith(\"xmlns:\"):\n                self.track_namespace(prefix[6:], uri)\n            elif prefix == \"xmlns\":\n                self.track_namespace(None, uri)\n\n        # track inline content\n        if self.incontent and not self.contentparams.get(\"type\", \"xml\").endswith(\"xml\"):\n            if tag in (\"xhtml:div\", \"div\"):\n                return  # typepad does this 10/2007\n            # element declared itself as escaped markup, but it isn't really\n            self.contentparams[\"type\"] = \"application/xhtml+xml\"\n        if self.incontent and self.contentparams.get(\"type\") == \"application/xhtml+xml\":\n            if tag.find(\":\") != -1:\n                prefix, tag = tag.split(\":\", 1)\n                namespace = self.namespaces_in_use.get(prefix, \"\")\n                if tag == \"math\" and namespace == \"http://www.w3.org/1998/Math/MathML\":\n                    attrs.append((\"xmlns\", namespace))\n                if tag == \"svg\" and namespace == \"http://www.w3.org/2000/svg\":\n                    attrs.append((\"xmlns\", namespace))\n            if tag == \"svg\":\n                self.svgOK += 1\n            return self.handle_data(f\"<{tag}{self.strattrs(attrs)}>\", escape=0)\n\n        # match namespaces\n        if tag.find(\":\") != -1:\n            prefix, suffix = tag.split(\":\", 1)\n        else:\n            prefix, suffix = \"\", tag\n        prefix = self.namespacemap.get(prefix, prefix)\n        if prefix:\n            prefix = prefix + \"_\"\n\n        # Special hack for better tracking of empty textinput/image elements in\n        # illformed feeds.\n        if (not prefix) and tag not in (\"title\", \"link\", \"description\", \"name\"):\n            self.intextinput = 0\n        if (not prefix) and tag not in (\n            \"title\",\n            \"link\",\n            \"description\",\n            \"url\",\n            \"href\",\n            \"width\",\n            \"height\",\n        ):\n            self.inimage = 0\n\n        # call special handler (if defined) or default handler\n        methodname = \"_start_\" + prefix + suffix\n        try:\n            method = getattr(self, methodname)\n            return method(attrs_d)\n        except AttributeError:\n            # Since there's no handler or something has gone wrong we\n            # explicitly add the element and its attributes.\n            unknown_tag = prefix + suffix\n            if len(attrs_d) == 0:\n                # No attributes so merge it into the enclosing dictionary\n                return self.push(unknown_tag, 1)\n            # Has attributes so create it in its own dictionary\n            context = self._get_context()\n            context[unknown_tag] = attrs_d",
+      "start_line": 223,
+      "end_line": 318,
+      "line_count": 96,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "tag",
+        "attrs"
+      ],
+      "dependencies": [
+        "getattr",
+        "isinstance",
+        "_get_context",
+        "len",
+        "replace",
+        "decode",
+        "track_namespace",
+        "endswith",
+        "push",
+        "dict",
+        "_normalize_attributes",
+        "get",
+        "append",
+        "split",
+        "_urljoin",
+        "startswith",
+        "handle_data",
+        "find",
+        "strattrs",
+        "make_safe_absolute_uri",
+        "method"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "api"
+    },
+    "file": {
+      "name": "api.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\api.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "parse",
+      "signature": "def parse(url_file_stream_or_string, response_headers: dict[str, str] | None=None, resolve_relative_uris: bool | None=None, sanitize_html: bool | None=None, optimistic_encoding_detection: bool | None=None) -> FeedParserDict",
+      "body": "def parse(\n    url_file_stream_or_string,\n    response_headers: dict[str, str] | None = None,\n    resolve_relative_uris: bool | None = None,\n    sanitize_html: bool | None = None,\n    optimistic_encoding_detection: bool | None = None,\n) -> FeedParserDict:\n    \"\"\"Parse a feed from a URL, file, stream, or string.\n\n    :param url_file_stream_or_string:\n        File-like object, URL, file path, or string. Both byte and text strings\n        are accepted. If necessary, encoding will be derived from the response\n        headers or automatically detected.\n\n        Note that strings may trigger network I/O or filesystem access\n        depending on the value. Wrap an untrusted string in\n        a :class:`io.StringIO` or :class:`io.BytesIO` to avoid this. Do not\n        pass untrusted strings to this function.\n\n        When a URL is not passed the feed location to use in relative URL\n        resolution should be passed in the ``Content-Location`` response header\n        (see ``response_headers`` below).\n    :param response_headers:\n        A mapping of HTTP header name to HTTP header value. Multiple values may\n        be joined with a comma. If a HTTP request was made, these headers\n        override any matching headers in the response. Otherwise this specifies\n        the entirety of the response headers.\n    :param resolve_relative_uris:\n        Should feedparser attempt to resolve relative URIs absolute ones within\n        HTML content?  Defaults to the value of\n        :data:`feedparser.RESOLVE_RELATIVE_URIS`, which is ``True``.\n    :param sanitize_html:\n        Should feedparser skip HTML sanitization? Only disable this if you know\n        what you are doing!  Defaults to the value of\n        :data:`feedparser.SANITIZE_HTML`, which is ``True``.\n    :param optimistic_encoding_detection:\n        Should feedparser use only a prefix of the feed to detect encodings\n        (uses less memory, but the wrong encoding may be detected in rare cases).\n        Defaults to the value of\n        :data:`feedparser.OPTIMISTIC_ENCODING_DETECTION`, which is ``True``.\n\n    \"\"\"\n\n    result = FeedParserDict(\n        bozo=False,\n        entries=[],\n        feed=FeedParserDict(),\n        headers={},\n    )\n\n    try:\n        file = _open_resource(\n            url_file_stream_or_string,\n            result,\n        )\n    except urllib.error.URLError as error:\n        result.update(\n            {\n                \"bozo\": True,\n                \"bozo_exception\": error,\n            }\n        )\n        return result\n\n    # at this point, the file is guaranteed to be seekable;\n    # we read 1 byte/character to see if it's empty and return early\n    # (this preserves the behavior in 6.0.8)\n    initial_file_offset = file.tell()\n    if not file.read(1):\n        return result\n    file.seek(initial_file_offset)\n\n    # overwrite existing headers using response_headers\n    result[\"headers\"].update(response_headers or {})\n\n    try:\n        _parse_file_inplace(\n            file,\n            result,\n            resolve_relative_uris=resolve_relative_uris,\n            sanitize_html=sanitize_html,\n            optimistic_encoding_detection=optimistic_encoding_detection,\n        )\n    finally:\n        if not hasattr(url_file_stream_or_string, \"read\"):\n            # the file does not come from the user, close it\n            file.close()\n\n    return result",
+      "start_line": 151,
+      "end_line": 239,
+      "line_count": 89,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "FeedParserDict",
+      "parameters": [
+        "url_file_stream_or_string",
+        "response_headers",
+        "resolve_relative_uris",
+        "sanitize_html",
+        "optimistic_encoding_detection"
+      ],
+      "dependencies": [
+        "read",
+        "seek",
+        "tell",
+        "_open_resource",
+        "FeedParserDict",
+        "hasattr",
+        "_parse_file_inplace",
+        "close",
+        "update"
+      ],
+      "decorators": [],
+      "docstring": "Parse a feed from a URL, file, stream, or string.\n\n:param url_file_stream_or_string:\n    File-like object, URL, file path, or string. Both byte and text strings\n    are accepted. If necessary, encoding will be derived from the response\n    headers or automatically detected.\n\n    Note that strings may trigger network I/O or filesystem access\n    depending on the value. Wrap an untrusted string in\n    a :class:`io.StringIO` or :class:`io.BytesIO` to avoid this. Do not\n    pass untrusted strings to this function.\n\n    When a URL is not passed the feed location to use in relative URL\n    resolution should be passed in the ``Content-Location`` response header\n    (see ``response_headers`` below).\n:param response_headers:\n    A mapping of HTTP header name to HTTP header value. Multiple values may\n    be joined with a comma. If a HTTP request was made, these headers\n    override any matching headers in the response. Otherwise this specifies\n    the entirety of the response headers.\n:param resolve_relative_uris:\n    Should feedparser attempt to resolve relative URIs absolute ones within\n    HTML content?  Defaults to the value of\n    :data:`feedparser.RESOLVE_RELATIVE_URIS`, which is ``True``.\n:param sanitize_html:\n    Should feedparser skip HTML sanitization? Only disable this if you know\n    what you are doing!  Defaults to the value of\n    :data:`feedparser.SANITIZE_HTML`, which is ``True``.\n:param optimistic_encoding_detection:\n    Should feedparser use only a prefix of the feed to detect encodings\n    (uses less memory, but the wrong encoding may be detected in rare cases).\n    Defaults to the value of\n    :data:`feedparser.OPTIMISTIC_ENCODING_DETECTION`, which is ``True``."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "iso8601"
+    },
+    "file": {
+      "name": "iso8601.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\iso8601.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_iso8601",
+      "signature": "def _parse_date_iso8601(date_string)",
+      "body": "def _parse_date_iso8601(date_string):\n    \"\"\"Parse a variety of ISO-8601-compatible formats like 20040105\"\"\"\n    m = None\n    for _iso8601_match in _iso8601_matches:\n        m = _iso8601_match(date_string)\n        if m:\n            break\n    if not m:\n        return\n    if m.span() == (0, 0):\n        return\n    params = m.groupdict()\n    ordinal = params.get(\"ordinal\", 0)\n    if ordinal:\n        ordinal = int(ordinal)\n    else:\n        ordinal = 0\n    year = params.get(\"year\", \"--\")\n    if not year or year == \"--\":\n        year = time.gmtime()[0]\n    elif len(year) == 2:\n        # ISO 8601 assumes current century, i.e. 93 -> 2093, NOT 1993\n        year = 100 * int(time.gmtime()[0] / 100) + int(year)\n    else:\n        year = int(year)\n    month = params.get(\"month\", \"-\")\n    if not month or month == \"-\":\n        # ordinals are NOT normalized by mktime, we simulate them\n        # by setting month=1, day=ordinal\n        if ordinal:\n            month = 1\n        else:\n            month = time.gmtime()[1]\n    month = int(month)\n    day = params.get(\"day\", 0)\n    if not day:\n        # see above\n        if ordinal:\n            day = ordinal\n        elif (\n            params.get(\"century\", 0) or params.get(\"year\", 0) or params.get(\"month\", 0)\n        ):\n            day = 1\n        else:\n            day = time.gmtime()[2]\n    else:\n        day = int(day)\n    # special case of the century - is the first year of the 21st century\n    # 2000 or 2001 ? The debate goes on...\n    if \"century\" in params:\n        year = (int(params[\"century\"]) - 1) * 100 + 1\n    # in ISO 8601 most fields are optional\n    for field in [\"hour\", \"minute\", \"second\", \"tzhour\", \"tzmin\"]:\n        if not params.get(field, None):\n            params[field] = 0\n    hour = int(params.get(\"hour\", 0))\n    minute = int(params.get(\"minute\", 0))\n    second = int(float(params.get(\"second\", 0)))\n    # weekday is normalized by mktime(), we can ignore it\n    weekday = 0\n    daylight_savings_flag = -1\n    tm = [\n        year,\n        month,\n        day,\n        hour,\n        minute,\n        second,\n        weekday,\n        ordinal,\n        daylight_savings_flag,\n    ]\n    # ISO 8601 time zone adjustments\n    tz = params.get(\"tz\")\n    if tz and tz != \"Z\":\n        if tz[0] == \"-\":\n            tm[3] += int(params.get(\"tzhour\", 0))\n            tm[4] += int(params.get(\"tzmin\", 0))\n        elif tz[0] == \"+\":\n            tm[3] -= int(params.get(\"tzhour\", 0))\n            tm[4] -= int(params.get(\"tzmin\", 0))\n        else:\n            return None\n    # Python's time.mktime() is a wrapper around the ANSI C mktime(3c)\n    # which is guaranteed to normalize d/m/y/h/m/s.\n    # Many implementations have bugs, but we'll pretend they don't.\n    return time.localtime(time.mktime(tuple(tm)))",
+      "start_line": 74,
+      "end_line": 160,
+      "line_count": 87,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "date_string"
+      ],
+      "dependencies": [
+        "groupdict",
+        "float",
+        "len",
+        "span",
+        "int",
+        "get",
+        "_iso8601_match",
+        "tuple",
+        "mktime",
+        "gmtime",
+        "localtime"
+      ],
+      "decorators": [],
+      "docstring": "Parse a variety of ISO-8601-compatible formats like 20040105"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "convert_file_to_utf8",
+      "signature": "def convert_file_to_utf8(http_headers, file, result, optimistic_encoding_detection=True)",
+      "body": "def convert_file_to_utf8(\n    http_headers, file, result, optimistic_encoding_detection=True\n):\n    \"\"\"Like convert_to_utf8(), but for a stream.\n\n    Unlike convert_to_utf8(), do not read the entire file in memory;\n    instead, return a text stream that decodes it on the fly.\n    This should consume significantly less memory,\n    because it avoids (repeatedly) converting the entire file contents\n    from bytes to str and back.\n\n    To detect the encoding, only a prefix of the file contents is used.\n    In rare cases, the wrong encoding may be detected for this prefix;\n    use optimistic_encoding_detection=False to use the entire file contents\n    (equivalent to a plain convert_to_utf8() call).\n\n    Args:\n        http_headers (dict): The response headers.\n        file (IO[bytes] or IO[str]): A read()-able (binary) stream.\n        result (dict): The result dictionary.\n        optimistic_encoding_detection (bool):\n            If true, use only a prefix of the file content to detect encoding.\n\n    Returns:\n        StreamFactory: a stream factory, with the detected encoding set, if any\n\n    \"\"\"\n    # Currently, this wraps convert_to_utf8(), because the logic is simply\n    # too complicated to ensure it's re-implemented correctly for a stream.\n    # That said, it should be possible to change the implementation\n    # transparently (not sure it's worth it, though).\n\n    # If file is a text stream, we don't need to detect encoding;\n    # we still need a bytes prefix to run functions on for side effects:\n    # convert_to_utf8() to sniff / set result['content-type'], and\n    # replace_doctype() to extract safe_entities.\n\n    if isinstance(file.read(0), str):\n        prefix = file.read(CONVERT_FILE_STR_PREFIX_LEN).encode(\"utf-8\")\n        prefix = convert_to_utf8(http_headers, prefix, result)\n        result[\"encoding\"] = \"utf-8\"\n        return StreamFactory(prefix, file, \"utf-8\")\n\n    if optimistic_encoding_detection:\n        prefix = convert_file_prefix_to_utf8(http_headers, file, result)\n        factory = StreamFactory(prefix, file, result.get(\"encoding\"))\n\n        # Before returning factory, ensure the entire file can be decoded;\n        # if it cannot, fall back to convert_to_utf8().\n        #\n        # Not doing this means feedparser.parse() may raise UnicodeDecodeError\n        # instead of setting bozo_exception to CharacterEncodingOverride,\n        # breaking the 6.x API.\n\n        try:\n            text_file = factory.get_text_file()\n        except MissingEncoding:\n            return factory\n        try:\n            # read in chunks to limit memory usage\n            while text_file.read(CONVERT_FILE_TEST_CHUNK_LEN):\n                pass\n        except UnicodeDecodeError:\n            # fall back to convert_to_utf8()\n            file = factory.get_binary_file()\n        else:\n            return factory\n\n    # this shouldn't increase memory usage if file is BytesIO,\n    # since BytesIO does copy-on-write; https://bugs.python.org/issue22003\n    data = convert_to_utf8(http_headers, file.read(), result)\n\n    # note that data *is* the prefix\n    return StreamFactory(data, io.BytesIO(b\"\"), result.get(\"encoding\"))",
+      "start_line": 349,
+      "end_line": 422,
+      "line_count": 74,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "http_headers",
+        "file",
+        "result",
+        "optimistic_encoding_detection"
+      ],
+      "dependencies": [
+        "get_text_file",
+        "BytesIO",
+        "read",
+        "convert_file_prefix_to_utf8",
+        "get",
+        "StreamFactory",
+        "isinstance",
+        "convert_to_utf8",
+        "get_binary_file",
+        "encode"
+      ],
+      "decorators": [],
+      "docstring": "Like convert_to_utf8(), but for a stream.\n\nUnlike convert_to_utf8(), do not read the entire file in memory;\ninstead, return a text stream that decodes it on the fly.\nThis should consume significantly less memory,\nbecause it avoids (repeatedly) converting the entire file contents\nfrom bytes to str and back.\n\nTo detect the encoding, only a prefix of the file contents is used.\nIn rare cases, the wrong encoding may be detected for this prefix;\nuse optimistic_encoding_detection=False to use the entire file contents\n(equivalent to a plain convert_to_utf8() call).\n\nArgs:\n    http_headers (dict): The response headers.\n    file (IO[bytes] or IO[str]): A read()-able (binary) stream.\n    result (dict): The result dictionary.\n    optimistic_encoding_detection (bool):\n        If true, use only a prefix of the file content to detect encoding.\n\nReturns:\n    StreamFactory: a stream factory, with the detected encoding set, if any"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "convert_file_prefix_to_utf8",
+      "signature": "def convert_file_prefix_to_utf8(http_headers, file: typing.IO[bytes], result, *, prefix_len: int=CONVERT_FILE_PREFIX_LEN, read_to_ascii_len: int=2 ** 8) -> bytes",
+      "body": "def convert_file_prefix_to_utf8(\n    http_headers,\n    file: typing.IO[bytes],\n    result,\n    *,\n    prefix_len: int = CONVERT_FILE_PREFIX_LEN,\n    read_to_ascii_len: int = 2**8,\n) -> bytes:\n    \"\"\"Like convert_to_utf8(), but only use the prefix of a binary file.\n\n    Set result like convert_to_utf8() would.\n\n    Return the updated prefix, as bytes.\n\n    \"\"\"\n    # This is complicated by convert_to_utf8() detecting the wrong encoding\n    # if we have only part of the bytes that make a code-point:\n    #\n    # '😀'.encode('utf-8')      -> utf-8\n    # '😀'.encode('utf-8')[:-1] -> windows-1252 + bozo\n\n    prefix = file.read(prefix_len - 1)\n\n    # reading up to after an ASCII byte increases\n    # the likelihood of being on a code point boundary\n    prefix += read_to_after_ascii_byte(file, read_to_ascii_len)\n\n    # call convert_to_utf8() up to 4 times,\n    # to make sure we eventually land on a code point boundary\n    candidates = []\n    for attempt in range(4):\n        byte = file.read(1)\n\n        # we're at the end of the file, and the loop already ran once\n        if not byte and attempt != 0:\n            break\n\n        prefix += byte\n\n        fake_result: typing.Any = {}\n        converted_prefix = convert_to_utf8(http_headers, prefix, fake_result)\n\n        # an encoding was detected successfully, keep it\n        if not fake_result.get(\"bozo\"):\n            break\n\n        candidates.append((file.tell(), converted_prefix, fake_result))\n\n    # no encoding was detected successfully, pick the \"best\" one\n    else:\n\n        def key(candidate):\n            *_, result = candidate\n\n            exc = result.get(\"bozo_exception\")\n            exc_score = 0\n            if isinstance(exc, NonXMLContentType):\n                exc_score = 20\n            elif isinstance(exc, CharacterEncodingOverride):\n                exc_score = 10\n\n            return (\n                exc_score,\n                # prefer utf- encodings to anything else\n                result.get(\"encoding\").startswith(\"utf-\"),\n            )\n\n        candidates.sort(key=key)\n        offset, converted_prefix, fake_result = candidates[-1]\n\n        file.seek(offset)\n\n    result.update(fake_result)\n    return converted_prefix",
+      "start_line": 425,
+      "end_line": 498,
+      "line_count": 74,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "bytes",
+      "parameters": [
+        "http_headers",
+        "file",
+        "result"
+      ],
+      "dependencies": [
+        "startswith",
+        "read",
+        "get",
+        "append",
+        "seek",
+        "isinstance",
+        "tell",
+        "convert_to_utf8",
+        "sort",
+        "update",
+        "read_to_after_ascii_byte",
+        "range"
+      ],
+      "decorators": [],
+      "docstring": "Like convert_to_utf8(), but only use the prefix of a binary file.\n\nSet result like convert_to_utf8() would.\n\nReturn the updated prefix, as bytes."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "w3dtf"
+    },
+    "file": {
+      "name": "w3dtf.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\w3dtf.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_w3dtf",
+      "signature": "def _parse_date_w3dtf(datestr)",
+      "body": "def _parse_date_w3dtf(datestr):\n    if not datestr.strip():\n        return None\n    parts = datestr.lower().split(\"t\")\n    if len(parts) == 1:\n        # This may be a date only, or may be an MSSQL-style date\n        parts = parts[0].split()\n        if len(parts) == 1:\n            # Treat this as a date only\n            parts.append(\"00:00:00z\")\n    elif len(parts) > 2:\n        return None\n    date = parts[0].split(\"-\", 2)\n    if not date or len(date[0]) != 4:\n        return None\n    # Ensure that `date` has 3 elements. Using '1' sets the default\n    # month to January and the default day to the 1st of the month.\n    date.extend([\"1\"] * (3 - len(date)))\n    try:\n        year, month, day = (int(i) for i in date)\n    except ValueError:\n        # `date` may have more than 3 elements or may contain\n        # non-integer strings.\n        return None\n    if parts[1].endswith(\"z\"):\n        parts[1] = parts[1][:-1]\n        parts.append(\"z\")\n    # Append the numeric timezone offset, if any, to parts.\n    # If this is an MSSQL-style date then parts[2] already contains\n    # the timezone information, so `append()` will not affect it.\n    # Add 1 to each value so that if `find()` returns -1 it will be\n    # treated as False.\n    loc = parts[1].find(\"-\") + 1 or parts[1].find(\"+\") + 1 or len(parts[1]) + 1\n    loc = loc - 1\n    parts.append(parts[1][loc:])\n    parts[1] = parts[1][:loc]\n    time = parts[1].split(\":\", 2)\n    # Ensure that time has 3 elements. Using '0' means that the\n    # minutes and seconds, if missing, will default to 0.\n    time.extend([\"0\"] * (3 - len(time)))\n    if parts[2][:1] in (\"-\", \"+\"):\n        try:\n            tzhour = int(parts[2][1:3])\n            tzmin = int(parts[2][4:])\n        except ValueError:\n            return None\n        if parts[2].startswith(\"-\"):\n            tzhour = tzhour * -1\n            tzmin = tzmin * -1\n    else:\n        tzhour = timezonenames.get(parts[2], 0)\n        tzmin = 0\n    try:\n        hour, minute, second = (int(float(i)) for i in time)\n    except ValueError:\n        return None\n    # Create the datetime object and timezone delta objects\n    try:\n        stamp = datetime.datetime(year, month, day, hour, minute, second)\n    except ValueError:\n        return None\n    delta = datetime.timedelta(0, 0, 0, 0, tzmin, tzhour)\n    # Return the date and timestamp in a UTC 9-tuple\n    try:\n        return (stamp - delta).utctimetuple()\n    except (OverflowError, ValueError):\n        # IronPython throws ValueErrors instead of OverflowErrors\n        return None",
+      "start_line": 61,
+      "end_line": 128,
+      "line_count": 68,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "datestr"
+      ],
+      "dependencies": [
+        "float",
+        "startswith",
+        "datetime",
+        "find",
+        "len",
+        "int",
+        "strip",
+        "append",
+        "get",
+        "timedelta",
+        "endswith",
+        "extend",
+        "utctimetuple",
+        "lower",
+        "split"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "sanitizer"
+    },
+    "file": {
+      "name": "sanitizer.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\sanitizer.py"
+    },
+    "class": {
+      "name": "HTMLSanitizer",
+      "fqn": "sanitizer.HTMLSanitizer"
+    },
+    "method": {
+      "name": "unknown_starttag",
+      "signature": "def unknown_starttag(self, tag, attrs)",
+      "body": "def unknown_starttag(self, tag, attrs):\n        acceptable_attributes = self.acceptable_attributes\n        keymap = {}\n        if tag not in self.acceptable_elements or self.svgOK:\n            if tag in self.unacceptable_elements_with_end_tag:\n                self.unacceptablestack += 1\n\n            # add implicit namespaces to html5 inline svg/mathml\n            if self._type.endswith(\"html\"):\n                if not dict(attrs).get(\"xmlns\"):\n                    if tag == \"svg\":\n                        attrs.append((\"xmlns\", \"http://www.w3.org/2000/svg\"))\n                    if tag == \"math\":\n                        attrs.append((\"xmlns\", \"http://www.w3.org/1998/Math/MathML\"))\n\n            # not otherwise acceptable, perhaps it is MathML or SVG?\n            if (\n                tag == \"math\"\n                and (\"xmlns\", \"http://www.w3.org/1998/Math/MathML\") in attrs\n            ):\n                self.mathmlOK += 1\n            if tag == \"svg\" and (\"xmlns\", \"http://www.w3.org/2000/svg\") in attrs:\n                self.svgOK += 1\n\n            # chose acceptable attributes based on tag class, else bail\n            if self.mathmlOK and tag in self.mathml_elements:\n                acceptable_attributes = self.mathml_attributes\n            elif self.svgOK and tag in self.svg_elements:\n                # For most vocabularies, lowercasing is a good idea. Many\n                # svg elements, however, are camel case.\n                if not self.svg_attr_map:\n                    lower = [attr.lower() for attr in self.svg_attributes]\n                    mix = [a for a in self.svg_attributes if a not in lower]\n                    self.svg_attributes = lower\n                    self.svg_attr_map = {a.lower(): a for a in mix}\n\n                    lower = [attr.lower() for attr in self.svg_elements]\n                    mix = [a for a in self.svg_elements if a not in lower]\n                    self.svg_elements = lower\n                    self.svg_elem_map = {a.lower(): a for a in mix}\n                acceptable_attributes = self.svg_attributes\n                tag = self.svg_elem_map.get(tag, tag)\n                keymap = self.svg_attr_map\n            elif tag not in self.acceptable_elements:\n                return\n\n        # declare xlink namespace, if needed\n        if self.mathmlOK or self.svgOK:\n            if any(a for a in attrs if a[0].startswith(\"xlink:\")):\n                if not (\"xmlns:xlink\", \"http://www.w3.org/1999/xlink\") in attrs:\n                    attrs.append((\"xmlns:xlink\", \"http://www.w3.org/1999/xlink\"))\n\n        clean_attrs = []\n        for key, value in self.normalize_attrs(attrs):\n            if key == \"style\" and \"style\" in acceptable_attributes:\n                clean_value = self.sanitize_style(value)\n                if clean_value:\n                    clean_attrs.append((key, clean_value))\n            elif key in acceptable_attributes:\n                key = keymap.get(key, key)\n                # make sure the uri uses an acceptable uri scheme\n                if key == \"href\":\n                    value = make_safe_absolute_uri(value)\n                clean_attrs.append((key, value))\n        super().unknown_starttag(tag, clean_attrs)",
+      "start_line": 752,
+      "end_line": 816,
+      "line_count": 65,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "tag",
+        "attrs"
+      ],
+      "dependencies": [
+        "startswith",
+        "any",
+        "sanitize_style",
+        "get",
+        "super",
+        "append",
+        "endswith",
+        "lower",
+        "normalize_attrs",
+        "make_safe_absolute_uri",
+        "unknown_starttag",
+        "dict"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "util"
+    },
+    "file": {
+      "name": "util.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\util.py"
+    },
+    "class": {
+      "name": "FeedParserDict",
+      "fqn": "util.FeedParserDict"
+    },
+    "method": {
+      "name": "__getitem__",
+      "signature": "def __getitem__(self, key, _stacklevel=2)",
+      "body": "def __getitem__(self, key, _stacklevel=2):\n        \"\"\"\n        :return: A :class:`FeedParserDict`.\n        \"\"\"\n\n        if key == \"category\":\n            try:\n                return dict.__getitem__(self, \"tags\")[0][\"term\"]\n            except IndexError:\n                raise KeyError(\"object doesn't have key 'category'\")\n        elif key == \"enclosures\":\n            return [\n                FeedParserDict(\n                    [(name, value) for (name, value) in link.items() if name != \"rel\"]\n                )\n                for link in dict.__getitem__(self, \"links\")\n                if link[\"rel\"] == \"enclosure\"\n            ]\n        elif key == \"license\":\n            for link in dict.__getitem__(self, \"links\"):\n                if link[\"rel\"] == \"license\" and \"href\" in link:\n                    return link[\"href\"]\n        elif key == \"updated\":\n            # Temporarily help developers out by keeping the old\n            # broken behavior that was reported in issue 310.\n            # This fix was proposed in issue 328.\n            if not dict.__contains__(self, \"updated\") and dict.__contains__(\n                self, \"published\"\n            ):\n                warnings.warn(\n                    \"To avoid breaking existing software while \"\n                    \"fixing issue 310, a temporary mapping has been created \"\n                    \"from `updated` to `published` if `updated` doesn't \"\n                    \"exist. This fallback will be removed in a future version \"\n                    \"of feedparser.\",\n                    DeprecationWarning,\n                    stacklevel=_stacklevel,\n                )\n                return dict.__getitem__(self, \"published\")\n            return dict.__getitem__(self, \"updated\")\n        elif key == \"updated_parsed\":\n            if not dict.__contains__(self, \"updated_parsed\") and dict.__contains__(\n                self, \"published_parsed\"\n            ):\n                warnings.warn(\n                    \"To avoid breaking existing software while \"\n                    \"fixing issue 310, a temporary mapping has been created \"\n                    \"from `updated_parsed` to `published_parsed` if \"\n                    \"`updated_parsed` doesn't exist. This fallback will be \"\n                    \"removed in a future version of feedparser.\",\n                    DeprecationWarning,\n                    stacklevel=_stacklevel,\n                )\n                return dict.__getitem__(self, \"published_parsed\")\n            return dict.__getitem__(self, \"updated_parsed\")\n        else:\n            realkey = self.keymap.get(key, key)\n            if isinstance(realkey, list):\n                for k in realkey:\n                    if dict.__contains__(self, k):\n                        return dict.__getitem__(self, k)\n            elif dict.__contains__(self, realkey):\n                return dict.__getitem__(self, realkey)\n        return dict.__getitem__(self, key)",
+      "start_line": 51,
+      "end_line": 114,
+      "line_count": 64,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "key",
+        "_stacklevel"
+      ],
+      "dependencies": [
+        "__contains__",
+        "KeyError",
+        "__getitem__",
+        "get",
+        "isinstance",
+        "items",
+        "warn",
+        "FeedParserDict"
+      ],
+      "decorators": [],
+      "docstring": ":return: A :class:`FeedParserDict`."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "api"
+    },
+    "file": {
+      "name": "api.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\api.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_open_resource",
+      "signature": "def _open_resource(url_file_stream_or_string, result)",
+      "body": "def _open_resource(\n    url_file_stream_or_string,\n    result,\n):\n    \"\"\"URL, filename, or string --> stream\n\n    This function lets you define parsers that take any input source\n    (URL, pathname to local or network file, or actual data as a string)\n    and deal with it in a uniform manner.  Returned object is guaranteed\n    to have all the basic stdio read methods (read, readline, readlines).\n    Just .close() the object when you're done with it.\n\n    :return: A seekable, readable file object.\n    \"\"\"\n\n    # Some notes on the history of the implementation of _open_resource().\n    #\n    # parse() might need to go over the feed content twice:\n    # if the strict parser fails, it tries again with the loose parser.\n    #\n    # In 5.2.0, this returned an open file, to be read() by parse().\n    # By 6.0.8, this returned bytes directly.\n    #\n    # Since #296 (>6.0.8), this once again returns an open file\n    # (to reduce memory usage, see convert_file_to_utf8() for details).\n    # However, to accommodate parse() needing the content twice,\n    # the returned file is guaranteed to be seekable.\n    # (If the underlying resource is not seekable,\n    # the content is read and wrapped in a io.BytesIO/StringIO.)\n\n    if callable(getattr(url_file_stream_or_string, \"read\", None)):\n        if callable(getattr(url_file_stream_or_string, \"seekable\", None)):\n            if url_file_stream_or_string.seekable():\n                return url_file_stream_or_string\n        return _to_in_memory_file(url_file_stream_or_string.read())\n\n    looks_like_url = isinstance(\n        url_file_stream_or_string, str\n    ) and urllib.parse.urlparse(url_file_stream_or_string)[0] in (\n        \"http\",\n        \"https\",\n    )\n    if looks_like_url:\n        data = http.get(url_file_stream_or_string, result)\n        return io.BytesIO(data)\n\n    # try to open with native open function (if url_file_stream_or_string is a filename)\n    try:\n        return open(url_file_stream_or_string, \"rb\")\n    except (OSError, TypeError, ValueError):\n        # if url_file_stream_or_string is a str object that\n        # cannot be converted to the encoding returned by\n        # sys.getfilesystemencoding(), a UnicodeEncodeError\n        # will be thrown\n        # If url_file_stream_or_string is a string that contains NULL\n        # (such as an XML document encoded in UTF-32), TypeError will\n        # be thrown.\n        pass\n\n    # treat url_file_stream_or_string as bytes/string\n    return _to_in_memory_file(url_file_stream_or_string)",
+      "start_line": 74,
+      "end_line": 134,
+      "line_count": 61,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "url_file_stream_or_string",
+        "result"
+      ],
+      "dependencies": [
+        "_to_in_memory_file",
+        "getattr",
+        "BytesIO",
+        "seekable",
+        "read",
+        "get",
+        "urlparse",
+        "isinstance",
+        "open",
+        "callable"
+      ],
+      "decorators": [],
+      "docstring": "URL, filename, or string --> stream\n\nThis function lets you define parsers that take any input source\n(URL, pathname to local or network file, or actual data as a string)\nand deal with it in a uniform manner.  Returned object is guaranteed\nto have all the basic stdio read methods (read, readline, readlines).\nJust .close() the object when you're done with it.\n\n:return: A seekable, readable file object."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "sanitizer"
+    },
+    "file": {
+      "name": "sanitizer.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\sanitizer.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "replace_doctype",
+      "signature": "def replace_doctype(data: bytes) -> tuple[str | None, bytes, dict[str, str]]",
+      "body": "def replace_doctype(data: bytes) -> tuple[str | None, bytes, dict[str, str]]:\n    \"\"\"Strip and replaces the DOCTYPE.\n\n    One RSS format -- Netscape's RSS 0.91 -- is identified within the XML declaration.\n    Therefore, this function must identify that version while replacing the DOCTYPE.\n\n    As a convenience to the loose XML parser, entities are pre-computed and returned.\n\n    The tuple that is returned has the following values, in order:\n\n    1.  The version extracted from the XML DOCTYPE.\n        The value will either be \"rss091n\" or None.\n    2.  Binary XML content with a replaced DOCTYPE.\n    3.  A dictionary of entities and replacements.\n    \"\"\"\n\n    # Verify this looks like an XML feed.\n    if not re.match(rb\"^\\s*<\", data):\n        return None, data, {}\n\n    # Divide the document into two groups by finding the location\n    # of the first element that doesn't begin with '<?' or '<!'.\n    match = re.search(rb\"<\\w\", data)\n    first_element = match.start() + 1 if match is not None else 0\n    head, data = data[:first_element], data[first_element:]\n\n    # Save, and then remove, any ENTITY declarations.\n    entity_results = RE_ENTITY_PATTERN.findall(head)\n    head = RE_ENTITY_PATTERN.sub(b\"\", head)\n\n    # Find the DOCTYPE declaration and check the feed type.\n    doctype_results = RE_DOCTYPE_PATTERN.findall(head)\n    doctype = doctype_results and doctype_results[0] or b\"\"\n    if b\"netscape\" in doctype.lower():\n        version = \"rss091n\"\n    else:\n        version = None\n\n    # Re-insert the safe ENTITY declarations if a DOCTYPE was found.\n    replacement = b\"\"\n    if len(doctype_results) == 1 and entity_results:\n        safe_entities = [e for e in entity_results if RE_SAFE_ENTITY_PATTERN.match(e)]\n        if safe_entities:\n            replacement = (\n                b\"<!DOCTYPE feed [\\n<!ENTITY\"\n                + b\">\\n<!ENTITY \".join(safe_entities)\n                + b\">\\n]>\"\n            )\n    data = RE_DOCTYPE_PATTERN.sub(replacement, head) + data\n\n    # Precompute the safe entities for the loose parser.\n    entities = {\n        k.decode(\"utf-8\"): v.decode(\"utf-8\")\n        for k, v in RE_SAFE_ENTITY_PATTERN.findall(replacement)\n    }\n    return version, data, entities",
+      "start_line": 922,
+      "end_line": 977,
+      "line_count": 56,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "tuple[str | None, bytes, dict[str, str]]",
+      "parameters": [
+        "data"
+      ],
+      "dependencies": [
+        "sub",
+        "len",
+        "start",
+        "search",
+        "decode",
+        "match",
+        "lower",
+        "findall",
+        "join"
+      ],
+      "decorators": [],
+      "docstring": "Strip and replaces the DOCTYPE.\n\nOne RSS format -- Netscape's RSS 0.91 -- is identified within the XML declaration.\nTherefore, this function must identify that version while replacing the DOCTYPE.\n\nAs a convenience to the loose XML parser, entities are pre-computed and returned.\n\nThe tuple that is returned has the following values, in order:\n\n1.  The version extracted from the XML DOCTYPE.\n    The value will either be \"rss091n\" or None.\n2.  Binary XML content with a replaced DOCTYPE.\n3.  A dictionary of entities and replacements."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "strict"
+    },
+    "file": {
+      "name": "strict.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\parsers\\strict.py"
+    },
+    "class": {
+      "name": "StrictXMLParser",
+      "fqn": "strict.StrictXMLParser"
+    },
+    "method": {
+      "name": "startElementNS",
+      "signature": "def startElementNS(self, name, qname, attrs)",
+      "body": "def startElementNS(self, name, qname, attrs):\n        namespace, localname = name\n        lowernamespace = str(namespace or \"\").lower()\n        if lowernamespace.find(\"backend.userland.com/rss\") != -1:\n            # match any backend.userland.com namespace\n            namespace = \"http://backend.userland.com/rss\"\n            lowernamespace = namespace\n        if qname and qname.find(\":\") > 0:\n            givenprefix = qname.split(\":\")[0]\n        else:\n            givenprefix = None\n        prefix = self._matchnamespaces.get(lowernamespace, givenprefix)\n        if (\n            givenprefix\n            and (prefix is None or (prefix == \"\" and lowernamespace == \"\"))\n            and givenprefix not in self.namespaces_in_use\n        ):\n            raise UndeclaredNamespace(\n                \"'%s' is not associated with a namespace\" % givenprefix\n            )\n        localname = str(localname).lower()\n\n        # qname implementation is horribly broken in Python 2.1 (it\n        # doesn't report any), and slightly broken in Python 2.2 (it\n        # doesn't report the xml: namespace). So we match up namespaces\n        # with a known list first, and then possibly override them with\n        # the qnames the SAX parser gives us (if indeed it gives us any\n        # at all).  Thanks to MatejC for helping me test this and\n        # tirelessly telling me that it didn't work yet.\n        attrsD, self.decls = self.decls, {}\n        if localname == \"math\" and namespace == \"http://www.w3.org/1998/Math/MathML\":\n            attrsD[\"xmlns\"] = namespace\n        if localname == \"svg\" and namespace == \"http://www.w3.org/2000/svg\":\n            attrsD[\"xmlns\"] = namespace\n\n        if prefix:\n            localname = prefix.lower() + \":\" + localname\n        elif namespace and not qname:  # Expat\n            for name, value in self.namespaces_in_use.items():\n                if name and value == namespace:\n                    localname = name + \":\" + localname\n                    break\n\n        for (namespace, attrlocalname), attrvalue in attrs.items():\n            lowernamespace = (namespace or \"\").lower()\n            prefix = self._matchnamespaces.get(lowernamespace, \"\")\n            if prefix:\n                attrlocalname = prefix + \":\" + attrlocalname\n            attrsD[str(attrlocalname).lower()] = attrvalue\n        for qname in attrs.getQNames():\n            attrsD[str(qname).lower()] = attrs.getValueByQName(qname)\n        localname = str(localname).lower()\n        self.unknown_starttag(localname, list(attrsD.items()))",
+      "start_line": 57,
+      "end_line": 109,
+      "line_count": 53,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "name",
+        "qname",
+        "attrs"
+      ],
+      "dependencies": [
+        "getValueByQName",
+        "find",
+        "list",
+        "get",
+        "getQNames",
+        "items",
+        "lower",
+        "UndeclaredNamespace",
+        "split",
+        "unknown_starttag",
+        "str"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "__init__",
+      "signature": "def __init__(self)",
+      "body": "def __init__(self):\n        if not self._matchnamespaces:\n            for k, v in self.namespaces.items():\n                self._matchnamespaces[k.lower()] = v\n        self.feeddata = FeedParserDict()  # feed-level data\n        self.entries = []  # list of entry-level data\n        self.version = \"\"  # feed type/version, see SUPPORTED_VERSIONS\n        self.namespaces_in_use = {}  # dictionary of namespaces defined by the feed\n        self.resolve_relative_uris = False\n        self.sanitize_html = False\n\n        # the following are used internally to track state;\n        # this is really out of control and should be refactored\n        self.infeed = 0\n        self.inentry = 0\n        self.incontent = 0\n        self.intextinput = 0\n        self.inimage = 0\n        self.inauthor = 0\n        self.incontributor = 0\n        self.inpublisher = 0\n        self.insource = 0\n        self.isentrylink = 0\n\n        self.sourcedata = FeedParserDict()\n        self.contentparams = FeedParserDict()\n        self._summaryKey = None\n        self.namespacemap = {}\n        self.elementstack = []\n        self.basestack = []\n        self.langstack = []\n        self.svgOK = 0\n        self.title_depth = -1\n        self.depth = 0\n        self.hasContent = 0\n        if self.lang:\n            self.feeddata[\"language\"] = self.lang.replace(\"_\", \"-\")\n\n        # A map of the following form:\n        #     {\n        #         object_that_value_is_set_on: {\n        #             property_name: depth_of_node_property_was_extracted_from,\n        #             other_property: depth_of_node_property_was_extracted_from,\n        #         },\n        #     }\n        self.property_depth_map = {}\n        super().__init__()",
+      "start_line": 172,
+      "end_line": 218,
+      "line_count": 47,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self"
+      ],
+      "dependencies": [
+        "__init__",
+        "replace",
+        "super",
+        "items",
+        "FeedParserDict",
+        "lower"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "unknown_endtag",
+      "signature": "def unknown_endtag(self, tag)",
+      "body": "def unknown_endtag(self, tag):\n        # match namespaces\n        if tag.find(\":\") != -1:\n            prefix, suffix = tag.split(\":\", 1)\n        else:\n            prefix, suffix = \"\", tag\n        prefix = self.namespacemap.get(prefix, prefix)\n        if prefix:\n            prefix = prefix + \"_\"\n        if suffix == \"svg\" and self.svgOK:\n            self.svgOK -= 1\n\n        # call special handler (if defined) or default handler\n        methodname = \"_end_\" + prefix + suffix\n        try:\n            if self.svgOK:\n                raise AttributeError()\n            method = getattr(self, methodname)\n            method()\n        except AttributeError:\n            self.pop(prefix + suffix)\n\n        # track inline content\n        if self.incontent and not self.contentparams.get(\"type\", \"xml\").endswith(\"xml\"):\n            # element declared itself as escaped markup, but it isn't really\n            if tag in (\"xhtml:div\", \"div\"):\n                return  # typepad does this 10/2007\n            self.contentparams[\"type\"] = \"application/xhtml+xml\"\n        if self.incontent and self.contentparams.get(\"type\") == \"application/xhtml+xml\":\n            tag = tag.split(\":\")[-1]\n            self.handle_data(\"</%s>\" % tag, escape=0)\n\n        # track xml:base and xml:lang going out of scope\n        if self.basestack:\n            self.basestack.pop()\n            if self.basestack and self.basestack[-1]:\n                self.baseuri = self.basestack[-1]\n        if self.langstack:\n            self.langstack.pop()\n            if self.langstack:  # and (self.langstack[-1] is not None):\n                self.lang = self.langstack[-1]\n\n        self.depth -= 1",
+      "start_line": 320,
+      "end_line": 362,
+      "line_count": 43,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "tag"
+      ],
+      "dependencies": [
+        "getattr",
+        "find",
+        "handle_data",
+        "AttributeError",
+        "get",
+        "pop",
+        "endswith",
+        "split",
+        "method"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "sanitizer"
+    },
+    "file": {
+      "name": "sanitizer.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\sanitizer.py"
+    },
+    "class": {
+      "name": "HTMLSanitizer",
+      "fqn": "sanitizer.HTMLSanitizer"
+    },
+    "method": {
+      "name": "sanitize_style",
+      "signature": "def sanitize_style(self, style)",
+      "body": "def sanitize_style(self, style):\n        # disallow urls\n        style = re.compile(r\"url\\s*\\(\\s*[^\\s)]+?\\s*\\)\\s*\").sub(\" \", style)\n\n        # gauntlet\n        if not re.match(\n            r\"\"\"^([:,;#%.\\sa-zA-Z0-9!]|\\w-\\w|'[\\s\\w]+'|\"[\\s\\w]+\"|\\([\\d,\\s]+\\))*$\"\"\",\n            style,\n        ):\n            return \"\"\n        # This replaced a regexp that used re.match and was prone to\n        # pathological back-tracking.\n        if re.sub(r\"\\s*[-\\w]+\\s*:\\s*[^:;]*;?\", \"\", style).strip():\n            return \"\"\n\n        clean = []\n        for prop, value in re.findall(r\"([-\\w]+)\\s*:\\s*([^:;]*)\", style):\n            if not value:\n                continue\n            if prop.lower() in self.acceptable_css_properties:\n                clean.append(prop + \": \" + value + \";\")\n            elif prop.split(\"-\")[0].lower() in [\n                \"background\",\n                \"border\",\n                \"margin\",\n                \"padding\",\n            ]:\n                for keyword in value.split():\n                    if (\n                        keyword not in self.acceptable_css_keywords\n                        and not self.valid_css_values.match(keyword)\n                    ):\n                        break\n                else:\n                    clean.append(prop + \": \" + value + \";\")\n            elif self.svgOK and prop.lower() in self.acceptable_svg_properties:\n                clean.append(prop + \": \" + value + \";\")\n\n        return \" \".join(clean)",
+      "start_line": 843,
+      "end_line": 881,
+      "line_count": 39,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "style"
+      ],
+      "dependencies": [
+        "sub",
+        "strip",
+        "append",
+        "match",
+        "join",
+        "findall",
+        "compile",
+        "lower",
+        "split"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "_sync_author_detail",
+      "signature": "def _sync_author_detail(self, key='author')",
+      "body": "def _sync_author_detail(self, key=\"author\"):\n        context = self._get_context()\n        detail = context.get(\"%ss\" % key, [FeedParserDict()])[-1]\n        if detail:\n            name = detail.get(\"name\")\n            email = detail.get(\"email\")\n            if name and email:\n                context[key] = f\"{name} ({email})\"\n            elif name:\n                context[key] = name\n            elif email:\n                context[key] = email\n        else:\n            author, email = context.get(key), None\n            if not author:\n                return\n            emailmatch = email_pattern.search(author)\n            if emailmatch:\n                email = emailmatch.group(0)\n                # probably a better way to do the following, but it passes\n                # all the tests\n                author = author.replace(email, \"\")\n                author = author.replace(\"()\", \"\")\n                author = author.replace(\"<>\", \"\")\n                author = author.replace(\"&lt;&gt;\", \"\")\n                author = author.strip()\n                if author and (author[0] == \"(\"):\n                    author = author[1:]\n                if author and (author[-1] == \")\"):\n                    author = author[:-1]\n                author = author.strip()\n            if author or email:\n                context.setdefault(\"%s_detail\" % key, detail)\n            if author:\n                detail[\"name\"] = author\n            if email:\n                detail[\"email\"] = email",
+      "start_line": 783,
+      "end_line": 819,
+      "line_count": 37,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "key"
+      ],
+      "dependencies": [
+        "group",
+        "replace",
+        "setdefault",
+        "get",
+        "search",
+        "strip",
+        "FeedParserDict",
+        "_get_context"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_temporary_behavior"
+    },
+    "file": {
+      "name": "test_temporary_behavior.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_temporary_behavior.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_issue_328_fallback_behavior",
+      "signature": "def test_issue_328_fallback_behavior()",
+      "body": "def test_issue_328_fallback_behavior():\n    \"\"\"Test fallback behavior. See issues 310 and 328.\"\"\"\n\n    warnings.filterwarnings(\"error\")\n\n    d = feedparser.util.FeedParserDict()\n    d[\"published\"] = \"pub string\"\n    d[\"published_parsed\"] = \"pub tuple\"\n    d[\"updated\"] = \"upd string\"\n    d[\"updated_parsed\"] = \"upd tuple\"\n    # Ensure that `updated` doesn't map to `published` when it exists\n    assert \"published\" in d\n    assert \"published_parsed\" in d\n    assert \"updated\" in d\n    assert \"updated_parsed\" in d\n    assert d[\"published\"] == \"pub string\"\n    assert d[\"published_parsed\"] == \"pub tuple\"\n    assert d[\"updated\"] == \"upd string\"\n    assert d[\"updated_parsed\"] == \"upd tuple\"\n\n    d = feedparser.util.FeedParserDict()\n    d[\"published\"] = \"pub string\"\n    d[\"published_parsed\"] = \"pub tuple\"\n    # Ensure that `updated` doesn't actually exist\n    assert \"updated\" not in d\n    assert \"updated_parsed\" not in d\n    # Ensure that accessing `updated` throws a DeprecationWarning\n    with pytest.warns(DeprecationWarning):\n        d[\"updated\"]\n    with pytest.warns(DeprecationWarning):\n        d[\"updated_parsed\"]\n    # Ensure that `updated` maps to `published`\n    warnings.filterwarnings(\"ignore\")\n    assert d[\"updated\"] == \"pub string\"\n    assert d[\"updated_parsed\"] == \"pub tuple\"\n    warnings.resetwarnings()",
+      "start_line": 8,
+      "end_line": 43,
+      "line_count": 36,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [],
+      "dependencies": [
+        "warns",
+        "FeedParserDict",
+        "filterwarnings",
+        "resetwarnings"
+      ],
+      "decorators": [],
+      "docstring": "Test fallback behavior. See issues 310 and 328."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "asctime"
+    },
+    "file": {
+      "name": "asctime.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\asctime.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_asctime",
+      "signature": "def _parse_date_asctime(dt)",
+      "body": "def _parse_date_asctime(dt):\n    \"\"\"Parse asctime-style dates.\n\n    Converts asctime to RFC822-compatible dates and uses the RFC822 parser\n    to do the actual parsing.\n\n    Supported formats (format is standardized to the first one listed):\n\n    * {weekday name} {month name} dd hh:mm:ss {+-tz} yyyy\n    * {weekday name} {month name} dd hh:mm:ss yyyy\n    \"\"\"\n\n    parts = dt.split()\n\n    # Insert a GMT timezone, if needed.\n    if len(parts) == 5:\n        parts.insert(4, \"+0000\")\n\n    # Exit if there are not six parts.\n    if len(parts) != 6:\n        return None\n\n    # Reassemble the parts in an RFC822-compatible order and parse them.\n    return _parse_date_rfc822(\n        \" \".join(\n            [\n                parts[0],\n                parts[2],\n                parts[1],\n                parts[5],\n                parts[3],\n                parts[4],\n            ]\n        )\n    )",
+      "start_line": 46,
+      "end_line": 80,
+      "line_count": 35,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "dt"
+      ],
+      "dependencies": [
+        "insert",
+        "len",
+        "join",
+        "_parse_date_rfc822",
+        "split"
+      ],
+      "decorators": [],
+      "docstring": "Parse asctime-style dates.\n\nConverts asctime to RFC822-compatible dates and uses the RFC822 parser\nto do the actual parsing.\n\nSupported formats (format is standardized to the first one listed):\n\n* {weekday name} {month name} dd hh:mm:ss {+-tz} yyyy\n* {weekday name} {month name} dd hh:mm:ss yyyy"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "json"
+    },
+    "file": {
+      "name": "json.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\parsers\\json.py"
+    },
+    "class": {
+      "name": "JSONParser",
+      "fqn": "json.JSONParser"
+    },
+    "method": {
+      "name": "parse_entry",
+      "signature": "def parse_entry(self, e)",
+      "body": "def parse_entry(self, e):\n        entry = FeedParserDict()\n        for src, dst in self.ITEM_FIELDS:\n            if src in e:\n                entry[dst] = e[src]\n\n        if \"content_text\" in e:\n            entry[\"content\"] = c = FeedParserDict()\n            c[\"value\"] = e[\"content_text\"]\n            c[\"type\"] = \"text\"\n        elif \"content_html\" in e:\n            entry[\"content\"] = c = FeedParserDict()\n            c[\"value\"] = sanitize_html(\n                e[\"content_html\"], self.encoding, \"application/json\"\n            )\n            c[\"type\"] = \"html\"\n\n        if \"date_published\" in e:\n            entry[\"published\"] = e[\"date_published\"]\n            entry[\"published_parsed\"] = _parse_date(e[\"date_published\"])\n        if \"date_updated\" in e:\n            entry[\"updated\"] = e[\"date_modified\"]\n            entry[\"updated_parsed\"] = _parse_date(e[\"date_modified\"])\n\n        if \"tags\" in e:\n            entry[\"category\"] = e[\"tags\"]\n\n        if \"author\" in e:\n            self.parse_author(e[\"author\"], entry)\n\n        if \"attachments\" in e:\n            entry[\"enclosures\"] = [self.parse_attachment(a) for a in e[\"attachments\"]]\n\n        return entry",
+      "start_line": 82,
+      "end_line": 115,
+      "line_count": 34,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "e"
+      ],
+      "dependencies": [
+        "FeedParserDict",
+        "sanitize_html",
+        "parse_attachment",
+        "_parse_date",
+        "parse_author"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_encoding_helpers"
+    },
+    "file": {
+      "name": "test_encoding_helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_encoding_helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_convert_file_to_utf8",
+      "signature": "def test_convert_file_to_utf8(headers, length)",
+      "body": "def test_convert_file_to_utf8(headers, length):\n    digits = b\"0123456789abcdef\"\n    data = feedparser.encodings.convert_to_utf8({}, b\"\", {}) + digits * int(\n        length / len(digits) + 2\n    )\n\n    expected_result = {}\n    expected_output = feedparser.encodings.convert_to_utf8(\n        headers, data, expected_result\n    )\n    expected_result.pop(\"bozo_exception\", None)\n\n    actual_result = {}\n    factory = feedparser.encodings.convert_file_to_utf8(\n        headers, io.BytesIO(data), actual_result\n    )\n\n    assert factory.get_text_file().read() == expected_output.decode(\"utf-8\")\n    assert factory.get_binary_file().read() == expected_output\n\n    actual_result.pop(\"bozo_exception\", None)\n    assert actual_result == expected_result\n\n    actual_result = {}\n    factory = feedparser.encodings.convert_file_to_utf8(\n        headers, io.StringIO(data.decode(\"utf-8\")), actual_result\n    )\n\n    assert factory.get_text_file().read() == expected_output.decode(\"utf-8\")\n\n    actual_result.pop(\"bozo_exception\", None)\n    assert actual_result == expected_result",
+      "start_line": 180,
+      "end_line": 211,
+      "line_count": 32,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "headers",
+        "length"
+      ],
+      "dependencies": [
+        "parametrize",
+        "get_text_file",
+        "BytesIO",
+        "len",
+        "int",
+        "read",
+        "decode",
+        "pop",
+        "StringIO",
+        "convert_to_utf8",
+        "get_binary_file",
+        "convert_file_to_utf8"
+      ],
+      "decorators": [
+        "pytest.mark.parametrize('headers', ({}, {'content-type': 'not-a-valid-content-type'}))",
+        "pytest.mark.parametrize('length', (feedparser.encodings.CONVERT_FILE_PREFIX_LEN, feedparser.encodings.CONVERT_FILE_STR_PREFIX_LEN))"
+      ],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "helpers"
+    },
+    "file": {
+      "name": "helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "get_http_test_data",
+      "signature": "def get_http_test_data(path: str, data: bytes, text: str) -> tuple[str, str, list[str], str]",
+      "body": "def get_http_test_data(\n    path: str, data: bytes, text: str\n) -> tuple[str, str, list[str], str]:\n    \"\"\"Register an HTTP response.\n\n    HTTP headers will be customized as specified by comments in the XML data.\n    For example:\n\n    ..  code-block:: xml\n\n        <!--\n        Header:   Content-type: application/atom+xml\n        Header:   X-Foo: bar\n        -->\n    \"\"\"\n\n    headers: dict[str, typing.Any] = {\"Content-Length\": str(len(data))}\n    headers.update({k: v.strip() for k, v in headers_re.findall(text)})\n    content_type = headers.pop(\"Content-type\", \"text/xml\")\n    target = posixpath.normpath(path.replace(\"\\\\\", \"/\"))\n    url = f\"http://127.0.0.1:8097/{target}\"\n\n    responses.get(\n        url,\n        headers=headers,\n        content_type=content_type,\n        body=data,\n    )\n\n    description, eval_string, skip_unless = get_test_data(path, text)\n    return url, description, eval_string, skip_unless",
+      "start_line": 96,
+      "end_line": 126,
+      "line_count": 31,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "tuple[str, str, list[str], str]",
+      "parameters": [
+        "path",
+        "data",
+        "text"
+      ],
+      "dependencies": [
+        "len",
+        "replace",
+        "normpath",
+        "get",
+        "strip",
+        "pop",
+        "findall",
+        "get_test_data",
+        "str",
+        "update"
+      ],
+      "decorators": [],
+      "docstring": "Register an HTTP response.\n\nHTTP headers will be customized as specified by comments in the XML data.\nFor example:\n\n..  code-block:: xml\n\n    <!--\n    Header:   Content-type: application/atom+xml\n    Header:   X-Foo: bar\n    -->"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "perforce"
+    },
+    "file": {
+      "name": "perforce.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\perforce.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_perforce",
+      "signature": "def _parse_date_perforce(date_string)",
+      "body": "def _parse_date_perforce(date_string):\n    \"\"\"parse a date in yyyy/mm/dd hh:mm:ss TTT format\"\"\"\n    # Fri, 2006/09/15 08:19:53 EDT\n    _my_date_pattern = re.compile(\n        r\"(\\w{,3}), (\\d{,4})/(\\d{,2})/(\\d{2}) (\\d{,2}):(\\d{2}):(\\d{2}) (\\w{,3})\"\n    )\n\n    m = _my_date_pattern.search(date_string)\n    if m is None:\n        return None\n    dow, year, month, day, hour, minute, second, tz = m.groups()\n    months = [\n        \"Jan\",\n        \"Feb\",\n        \"Mar\",\n        \"Apr\",\n        \"May\",\n        \"Jun\",\n        \"Jul\",\n        \"Aug\",\n        \"Sep\",\n        \"Oct\",\n        \"Nov\",\n        \"Dec\",\n    ]\n    new_date_string = (\n        f\"{dow}, {day} {months[int(month) - 1]} {year} {hour}:{minute}:{second} {tz}\"\n    )\n    tm = email.utils.parsedate_tz(new_date_string)\n    if tm:\n        return time.gmtime(email.utils.mktime_tz(tm))",
+      "start_line": 33,
+      "end_line": 63,
+      "line_count": 31,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "date_string"
+      ],
+      "dependencies": [
+        "groups",
+        "int",
+        "search",
+        "mktime_tz",
+        "compile",
+        "gmtime",
+        "parsedate_tz"
+      ],
+      "decorators": [],
+      "docstring": "parse a date in yyyy/mm/dd hh:mm:ss TTT format"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "helpers"
+    },
+    "file": {
+      "name": "helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "get_file_contents",
+      "signature": "def get_file_contents(file: str) -> tuple[bytes, str]",
+      "body": "def get_file_contents(file: str) -> tuple[bytes, str]:\n    \"\"\"Identify data's encoding using its byte order mark and convert it to text.\"\"\"\n\n    with open(file, \"rb\") as fp:\n        data = fp.read()\n\n    if data[:4] == b\"\\x00\\x00\\xfe\\xff\":\n        return data, data.decode(\"utf-32be\")\n    elif data[:4] == b\"\\xff\\xfe\\x00\\x00\":\n        return data, data.decode(\"utf-32le\")\n    elif data[:4] == b\"\\x00\\x00\\x00\\x3c\":\n        return data, data.decode(\"utf-32be\")\n    elif data[:4] == b\"\\x3c\\x00\\x00\\x00\":\n        return data, data.decode(\"utf-32le\")\n    elif data[:4] == b\"\\x00\\x3c\\x00\\x3f\":\n        return data, data.decode(\"utf-16be\")\n    elif data[:4] == b\"\\x3c\\x00\\x3f\\x00\":\n        return data, data.decode(\"utf-16le\")\n    elif (data[:2] == b\"\\xfe\\xff\") and (data[2:4] != b\"\\x00\\x00\"):\n        return data, data[2:].decode(\"utf-16be\")\n    elif (data[:2] == b\"\\xff\\xfe\") and (data[2:4] != b\"\\x00\\x00\"):\n        return data, data[2:].decode(\"utf-16le\")\n    elif data[:3] == b\"\\xef\\xbb\\xbf\":\n        return data, data[3:].decode(\"utf-8\", errors=\"ignore\")\n\n    # No byte order mark was found. Assume UTF-8, and ignore errors.\n    return data, data.decode(\"utf-8\", errors=\"ignore\")",
+      "start_line": 17,
+      "end_line": 43,
+      "line_count": 27,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "tuple[bytes, str]",
+      "parameters": [
+        "file"
+      ],
+      "dependencies": [
+        "open",
+        "read",
+        "decode"
+      ],
+      "decorators": [],
+      "docstring": "Identify data's encoding using its byte order mark and convert it to text."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "http"
+    },
+    "file": {
+      "name": "http.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\http.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "get",
+      "signature": "def get(url: str, result: dict[str, typing.Any]) -> bytes",
+      "body": "def get(url: str, result: dict[str, typing.Any]) -> bytes:\n    try:\n        response = requests.get(\n            url,\n            headers={\"Accept\": ACCEPT_HEADER},\n            timeout=10,\n        )\n    except requests.RequestException as exception:\n        result[\"bozo\"] = True\n        result[\"bozo_exception\"] = exception\n        return b\"\"\n\n    # Lowercase the HTTP header keys for comparisons per RFC 2616.\n    result[\"headers\"] = {k.lower(): v for k, v in response.headers.items()}\n\n    # save HTTP headers\n    if \"etag\" in result[\"headers\"]:\n        result[\"etag\"] = result[\"headers\"][\"etag\"]\n    if \"last-modified\" in result[\"headers\"]:\n        modified = result[\"headers\"][\"last-modified\"]\n        if modified:\n            result[\"modified\"] = modified\n            result[\"modified_parsed\"] = _parse_date(modified)\n    result[\"href\"] = response.url\n    result[\"status\"] = response.status_code\n    return response.content",
+      "start_line": 49,
+      "end_line": 74,
+      "line_count": 26,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "bytes",
+      "parameters": [
+        "url",
+        "result"
+      ],
+      "dependencies": [
+        "_parse_date",
+        "lower",
+        "get",
+        "items"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": "PrefixFileWrapper",
+      "fqn": "encodings.PrefixFileWrapper"
+    },
+    "method": {
+      "name": "read",
+      "signature": "def read(self, size=-1)",
+      "body": "def read(self, size=-1):\n        buffer = self.file.read(0)\n\n        if self.offset < len(self.prefix):\n            if size < 0:\n                chunk = self.prefix[self.offset :]\n            else:\n                chunk = self.prefix[self.offset : self.offset + size]\n                size -= len(chunk)\n            buffer += chunk\n            self.offset += len(chunk)\n\n        while True:\n            chunk = self.file.read(size)\n            if not chunk:\n                break\n            buffer += chunk\n            self.offset += len(chunk)\n\n            if size <= 0:\n                break\n\n            size -= len(chunk)\n\n        return buffer",
+      "start_line": 621,
+      "end_line": 645,
+      "line_count": 25,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "size"
+      ],
+      "dependencies": [
+        "read",
+        "len"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "looks_like_html",
+      "signature": "def looks_like_html(s)",
+      "body": "def looks_like_html(s):\n        \"\"\"\n        :type s: str\n        :rtype: bool\n        \"\"\"\n\n        # must have a close tag or an entity reference to qualify\n        if not (re.search(r\"</(\\w+)>\", s) or re.search(r\"&#?\\w+;\", s)):\n            return False\n\n        # all tags must be in a restricted subset of valid HTML tags\n        if any(\n            t\n            for t in re.findall(r\"</?(\\w+)\", s)\n            if t.lower() not in HTMLSanitizer.acceptable_elements\n        ):\n            return False\n\n        # all entities must have been defined as valid HTML entities\n        if any(\n            e for e in re.findall(r\"&(\\w+);\", s) if e not in html.entities.entitydefs\n        ):\n            return False\n\n        return True",
+      "start_line": 686,
+      "end_line": 710,
+      "line_count": 25,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "s"
+      ],
+      "dependencies": [
+        "any",
+        "lower",
+        "search",
+        "findall"
+      ],
+      "decorators": [
+        "staticmethod"
+      ],
+      "docstring": ":type s: str\n:rtype: bool"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_encoding_helpers"
+    },
+    "file": {
+      "name": "test_encoding_helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_encoding_helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_reset_file_wrapper",
+      "signature": "def test_reset_file_wrapper()",
+      "body": "def test_reset_file_wrapper():\n    f = feedparser.encodings.ResetFileWrapper(io.BytesIO(b\"abcdef\"))\n    assert f.read(2) == b\"ab\"\n    f.reset()\n    assert f.read() == b\"abcdef\"\n\n    f = io.BytesIO(b\"abcdef\")\n    f.read(2)\n    f = feedparser.encodings.ResetFileWrapper(f)\n    assert f.read(2) == b\"cd\"\n    f.reset()\n    assert f.read() == b\"cdef\"\n\n    f = feedparser.encodings.ResetFileWrapper(Unseekable(b\"abcdef\"))\n    assert f.read() == b\"abcdef\"\n    assert f.read() == b\"\"\n    with pytest.raises(io.UnsupportedOperation):\n        f.reset()\n    assert f.read() == b\"\"\n\n    f = feedparser.encodings.ResetFileWrapper(Unseekable(b\"abcdef\"))\n    assert f.read(3) == b\"abc\"\n    with pytest.raises(io.UnsupportedOperation):\n        f.reset()\n    assert f.read() == b\"def\"",
+      "start_line": 16,
+      "end_line": 40,
+      "line_count": 25,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [],
+      "dependencies": [
+        "reset",
+        "BytesIO",
+        "raises",
+        "read",
+        "Unseekable",
+        "ResetFileWrapper"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_encoding_helpers"
+    },
+    "file": {
+      "name": "test_encoding_helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_encoding_helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_prefix_file_wrapper",
+      "signature": "def test_prefix_file_wrapper(factory)",
+      "body": "def test_prefix_file_wrapper(factory):\n    f = feedparser.encodings.PrefixFileWrapper(b\"abc\", factory(b\"def\"))\n    assert f.read() == b\"abcdef\"\n    assert f.read() == b\"\"\n\n    f = feedparser.encodings.PrefixFileWrapper(b\"abc\", factory(b\"def\"))\n    assert f.read(2) == b\"ab\"\n    assert f.read(2) == b\"cd\"\n    assert f.read(2) == b\"ef\"\n    assert f.read(2) == b\"\"\n    assert f.read() == b\"\"\n\n    f = feedparser.encodings.PrefixFileWrapper(b\"abc\", factory(b\"def\"))\n    assert f.read(3) == b\"abc\"\n    assert f.read(3) == b\"def\"\n    assert f.read(3) == b\"\"\n    assert f.read() == b\"\"\n\n    f = feedparser.encodings.PrefixFileWrapper(b\"abc\", factory(b\"def\"))\n    assert f.read(0) == b\"\"\n    assert f.read() == b\"abcdef\"\n\n    f = feedparser.encodings.PrefixFileWrapper(b\"abc\", factory(b\"def\"))\n    assert f.read(2) == b\"ab\"\n    assert f.read() == b\"cdef\"",
+      "start_line": 105,
+      "end_line": 129,
+      "line_count": 25,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "factory"
+      ],
+      "dependencies": [
+        "factory",
+        "read",
+        "parametrize",
+        "PrefixFileWrapper"
+      ],
+      "decorators": [
+        "pytest.mark.parametrize('factory', [_make_file, _make_file_in_the_middle, _make_file_one_by_one])"
+      ],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "korean"
+    },
+    "file": {
+      "name": "korean.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\korean.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_nate",
+      "signature": "def _parse_date_nate(dateString)",
+      "body": "def _parse_date_nate(dateString):\n    \"\"\"Parse a string according to the Nate 8-bit date format\"\"\"\n    m = _korean_nate_date_re.match(dateString)\n    if not m:\n        return\n    hour = int(m.group(5))\n    ampm = m.group(4)\n    if ampm == _korean_pm:\n        hour += 12\n    hour = str(hour)\n    if len(hour) == 1:\n        hour = \"0\" + hour\n    w3dtfdate = (\n        \"%(year)s-%(month)s-%(day)sT%(hour)s:%(minute)s:%(second)s%(zonediff)s\"\n        % {\n            \"year\": m.group(1),\n            \"month\": m.group(2),\n            \"day\": m.group(3),\n            \"hour\": hour,\n            \"minute\": m.group(6),\n            \"second\": m.group(7),\n            \"zonediff\": \"+09:00\",\n        }\n    )\n    return _parse_date_w3dtf(w3dtfdate)",
+      "start_line": 70,
+      "end_line": 94,
+      "line_count": 25,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "dateString"
+      ],
+      "dependencies": [
+        "group",
+        "len",
+        "int",
+        "match",
+        "str",
+        "_parse_date_w3dtf"
+      ],
+      "decorators": [],
+      "docstring": "Parse a string according to the Nate 8-bit date format"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "html"
+    },
+    "file": {
+      "name": "html.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\html.py"
+    },
+    "class": {
+      "name": "BaseHTMLProcessor",
+      "fqn": "html.BaseHTMLProcessor"
+    },
+    "method": {
+      "name": "unknown_starttag",
+      "signature": "def unknown_starttag(self, tag, attrs)",
+      "body": "def unknown_starttag(self, tag, attrs):\n        \"\"\"\n        :type tag: str\n        :type attrs: List[Tuple[str, str]]\n        :rtype: None\n        \"\"\"\n\n        # Called for each start tag\n        # attrs is a list of (attr, value) tuples\n        # e.g. for <pre class='screen'>, tag='pre', attrs=[('class', 'screen')]\n        uattrs = []\n        strattrs = \"\"\n        if attrs:\n            for key, value in attrs:\n                value = value.replace(\">\", \"&gt;\")\n                value = value.replace(\"<\", \"&lt;\")\n                value = value.replace('\"', \"&quot;\")\n                value = self.bare_ampersand.sub(\"&amp;\", value)\n                uattrs.append((key, value))\n            strattrs = \"\".join(f' {key}=\"{value}\"' for key, value in uattrs)\n        if tag in self.elements_no_end_tag:\n            self.pieces.append(f\"<{tag}{strattrs} />\")\n        else:\n            self.pieces.append(f\"<{tag}{strattrs}>\")",
+      "start_line": 180,
+      "end_line": 203,
+      "line_count": 24,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "tag",
+        "attrs"
+      ],
+      "dependencies": [
+        "replace",
+        "join",
+        "append",
+        "sub"
+      ],
+      "decorators": [],
+      "docstring": ":type tag: str\n:type attrs: List[Tuple[str, str]]\n:rtype: None"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "_base"
+    },
+    "file": {
+      "name": "_base.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\namespaces\\_base.py"
+    },
+    "class": {
+      "name": "Namespace",
+      "fqn": "_base.Namespace"
+    },
+    "method": {
+      "name": "_start_link",
+      "signature": "def _start_link(self, attrs_d)",
+      "body": "def _start_link(self, attrs_d):\n        attrs_d.setdefault(\"rel\", \"alternate\")\n        if attrs_d[\"rel\"] == \"self\":\n            attrs_d.setdefault(\"type\", \"application/atom+xml\")\n        else:\n            attrs_d.setdefault(\"type\", \"text/html\")\n        context = self._get_context()\n        attrs_d = self._enforce_href(attrs_d)\n        if \"href\" in attrs_d:\n            attrs_d[\"href\"] = self.resolve_uri(attrs_d[\"href\"])\n        if (\n            attrs_d.get(\"rel\") == \"alternate\"\n            and self.map_content_type(attrs_d.get(\"type\")) in self.html_types\n        ):\n            self.isentrylink = 1\n        expecting_text = self.infeed or self.inentry or self.insource\n        context.setdefault(\"links\", [])\n        if not (self.inentry and self.inimage):\n            context[\"links\"].append(FeedParserDict(attrs_d))\n        if \"href\" in attrs_d:\n            if self.isentrylink:\n                context[\"link\"] = attrs_d[\"href\"]\n        else:\n            self.push(\"link\", expecting_text)",
+      "start_line": 354,
+      "end_line": 377,
+      "line_count": 24,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "attrs_d"
+      ],
+      "dependencies": [
+        "setdefault",
+        "get",
+        "append",
+        "resolve_uri",
+        "_enforce_href",
+        "FeedParserDict",
+        "_get_context",
+        "map_content_type",
+        "push"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "read_to_after_ascii_byte",
+      "signature": "def read_to_after_ascii_byte(file: typing.IO[bytes], max_len: int) -> bytes",
+      "body": "def read_to_after_ascii_byte(file: typing.IO[bytes], max_len: int) -> bytes:\n    offset = file.tell()\n    buffer = b\"\"\n\n    for _ in range(max_len):\n        byte = file.read(1)\n\n        # end of file, nothing to do\n        if not byte:\n            break\n\n        buffer += byte\n\n        # we stop after a ASCII character\n        if byte < b\"\\x80\":\n            break\n\n    # couldn't find an ASCII character, reset the file to the original offset\n    else:\n        file.seek(offset)\n        return b\"\"\n\n    return buffer",
+      "start_line": 501,
+      "end_line": 523,
+      "line_count": 23,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "bytes",
+      "parameters": [
+        "file",
+        "max_len"
+      ],
+      "dependencies": [
+        "read",
+        "range",
+        "tell",
+        "seek"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_encoding_helpers"
+    },
+    "file": {
+      "name": "test_encoding_helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_encoding_helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_convert_file_prefix_to_utf8",
+      "signature": "def test_convert_file_prefix_to_utf8(data, data_multiplier, kwargs, headers)",
+      "body": "def test_convert_file_prefix_to_utf8(data, data_multiplier, kwargs, headers):\n    data = data * data_multiplier\n\n    expected_result = {}\n    expected_output = feedparser.encodings.convert_to_utf8(\n        headers, data.encode(\"utf-8\"), expected_result\n    )\n    file = io.BytesIO(data.encode(\"utf-8\"))\n\n    actual_result = {}\n    prefix = feedparser.encodings.convert_file_prefix_to_utf8(\n        headers, file, actual_result, **kwargs\n    )\n    rest = file.read()\n\n    assert prefix + rest == expected_output\n    assert prefix.decode(\"utf-8\") + rest.decode(\"utf-8\") == expected_output.decode(\n        \"utf-8\"\n    )\n\n    expected_result.pop(\"bozo_exception\", None)\n    actual_result.pop(\"bozo_exception\", None)\n    assert actual_result == expected_result",
+      "start_line": 147,
+      "end_line": 169,
+      "line_count": 23,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "data",
+        "data_multiplier",
+        "kwargs",
+        "headers"
+      ],
+      "dependencies": [
+        "parametrize",
+        "BytesIO",
+        "read",
+        "convert_file_prefix_to_utf8",
+        "decode",
+        "pop",
+        "convert_to_utf8",
+        "encode"
+      ],
+      "decorators": [
+        "pytest.mark.parametrize('data', ('😀😛🤯😱', '😀a😛b🤯c😱'))",
+        "pytest.mark.parametrize('data_multiplier, kwargs', ((1, {'prefix_len': 3}), (1, {'prefix_len': 4}), (1, {'prefix_len': 5}), (1, {'prefix_len': 8}), (1, {'prefix_len': 40}), (8, {'prefix_len': 2, 'read_to_ascii_len': 4}), (8, {'prefix_len': 4, 'read_to_ascii_len': 4})))",
+        "pytest.mark.parametrize('headers', ({}, {'content-type': 'not-a-valid-content-type'}))"
+      ],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "encodings"
+    },
+    "file": {
+      "name": "encodings.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\encodings.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "parse_content_type",
+      "signature": "def parse_content_type(line: str) -> tuple[str, str]",
+      "body": "def parse_content_type(line: str) -> tuple[str, str]:\n    \"\"\"Parse an HTTP Content-Type header.\n\n    The return value will be a tuple of strings:\n    the MIME type, and the value of the \"charset\" (if any).\n\n    This is a custom replacement for Python's cgi.parse_header().\n    The cgi module will be removed in Python 3.13.\n    \"\"\"\n\n    chunks = line.split(\";\")\n    if not chunks:\n        return \"\", \"\"\n\n    mime_type = chunks[0].strip()\n    charset_value = \"\"\n    for chunk in chunks[1:]:\n        key, _, value = chunk.partition(\"=\")\n        if key.strip().lower() == \"charset\":\n            charset_value = value.strip().strip(\"\\\"'\")\n\n    return mime_type, charset_value",
+      "start_line": 75,
+      "end_line": 96,
+      "line_count": 22,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "tuple[str, str]",
+      "parameters": [
+        "line"
+      ],
+      "dependencies": [
+        "split",
+        "strip",
+        "partition",
+        "lower"
+      ],
+      "decorators": [],
+      "docstring": "Parse an HTTP Content-Type header.\n\nThe return value will be a tuple of strings:\nthe MIME type, and the value of the \"charset\" (if any).\n\nThis is a custom replacement for Python's cgi.parse_header().\nThe cgi module will be removed in Python 3.13."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_encoding_helpers"
+    },
+    "file": {
+      "name": "test_encoding_helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_encoding_helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_convert_file_to_utf8_decode_error_fallback",
+      "signature": "def test_convert_file_to_utf8_decode_error_fallback()",
+      "body": "def test_convert_file_to_utf8_decode_error_fallback():\n    # TODO: Confirm this test is useful. It looks like a tautology.\n    data = (\n        \"abcd😀\".encode() * feedparser.encodings.CONVERT_FILE_PREFIX_LEN\n        + \"abcd😀\".encode(\"utf-32\")\n    )\n    headers = {}\n\n    expected_result = {}\n    expected_output = feedparser.encodings.convert_to_utf8(\n        headers, data, expected_result\n    )\n    actual_result = {}\n    factory = feedparser.encodings.convert_file_to_utf8(\n        headers, io.BytesIO(data), actual_result\n    )\n\n    assert factory.get_binary_file().read() == expected_output\n    assert actual_result[\"encoding\"] == expected_result[\"encoding\"]\n    assert isinstance(\n        actual_result[\"bozo_exception\"], type(expected_result[\"bozo_exception\"])\n    )",
+      "start_line": 51,
+      "end_line": 72,
+      "line_count": 22,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [],
+      "dependencies": [
+        "BytesIO",
+        "type",
+        "read",
+        "isinstance",
+        "convert_to_utf8",
+        "get_binary_file",
+        "convert_file_to_utf8",
+        "encode"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "loose"
+    },
+    "file": {
+      "name": "loose.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\parsers\\loose.py"
+    },
+    "class": {
+      "name": "LooseXMLParser",
+      "fqn": "loose.LooseXMLParser"
+    },
+    "method": {
+      "name": "decode_entities",
+      "signature": "def decode_entities(self, element, data)",
+      "body": "def decode_entities(self, element, data):\n        data = data.replace(\"&#60;\", \"&lt;\")\n        data = data.replace(\"&#x3c;\", \"&lt;\")\n        data = data.replace(\"&#x3C;\", \"&lt;\")\n        data = data.replace(\"&#62;\", \"&gt;\")\n        data = data.replace(\"&#x3e;\", \"&gt;\")\n        data = data.replace(\"&#x3E;\", \"&gt;\")\n        data = data.replace(\"&#38;\", \"&amp;\")\n        data = data.replace(\"&#x26;\", \"&amp;\")\n        data = data.replace(\"&#34;\", \"&quot;\")\n        data = data.replace(\"&#x22;\", \"&quot;\")\n        data = data.replace(\"&#39;\", \"&apos;\")\n        data = data.replace(\"&#x27;\", \"&apos;\")\n        if not self.contentparams.get(\"type\", \"xml\").endswith(\"xml\"):\n            data = data.replace(\"&lt;\", \"<\")\n            data = data.replace(\"&gt;\", \">\")\n            data = data.replace(\"&amp;\", \"&\")\n            data = data.replace(\"&quot;\", '\"')\n            data = data.replace(\"&apos;\", \"'\")\n            data = data.replace(\"&#x2f;\", \"/\")\n            data = data.replace(\"&#x2F;\", \"/\")\n        return data",
+      "start_line": 50,
+      "end_line": 71,
+      "line_count": 22,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "element",
+        "data"
+      ],
+      "dependencies": [
+        "replace",
+        "endswith",
+        "get"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "html"
+    },
+    "file": {
+      "name": "html.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\html.py"
+    },
+    "class": {
+      "name": "BaseHTMLProcessor",
+      "fqn": "html.BaseHTMLProcessor"
+    },
+    "method": {
+      "name": "_scan_name",
+      "signature": "def _scan_name(self, i, declstartpos)",
+      "body": "def _scan_name(self, i, declstartpos):\n        \"\"\"\n        :type i: int\n        :type declstartpos: int\n        :rtype: Tuple[Optional[str], int]\n        \"\"\"\n\n        rawdata = self.rawdata\n        n = len(rawdata)\n        if i == n:\n            return None, -1\n        m = self._new_declname_match(rawdata, i)\n        if m:\n            s = m.group()\n            name = s.strip()\n            if (i + len(s)) == n:\n                return None, -1  # end of buffer\n            return name.lower(), m.end()\n        self.handle_data(rawdata)\n        # self.updatepos(declstartpos, i)\n        return None, -1",
+      "start_line": 293,
+      "end_line": 313,
+      "line_count": 21,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "i",
+        "declstartpos"
+      ],
+      "dependencies": [
+        "end",
+        "handle_data",
+        "group",
+        "len",
+        "strip",
+        "lower",
+        "_new_declname_match"
+      ],
+      "decorators": [],
+      "docstring": ":type i: int\n:type declstartpos: int\n:rtype: Tuple[Optional[str], int]"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "helpers"
+    },
+    "file": {
+      "name": "helpers.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\helpers.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "get_test_data",
+      "signature": "def get_test_data(path: str, text: str) -> tuple[str, list[str], str]",
+      "body": "def get_test_data(path: str, text: str) -> tuple[str, list[str], str]:\n    \"\"\"Extract test data\n\n    Each test case is an XML file which contains not only a test feed\n    but also the description of the test and the condition that we\n    would expect the parser to create when it parses the feed.  Example:\n    <!--\n    Description: feed title\n    Expect:      feed['title'] == 'Example feed'\n    -->\n    \"\"\"\n    skip_results = skip_re.search(text)\n    if skip_results:\n        skip_unless = skip_results.group(1).strip()\n    else:\n        skip_unless = \"1\"\n    search_results = desc_re.search(text)\n    assert search_results is not None\n    description, eval_string = (s.strip() for s in list(search_results.groups()))\n    description = path + \": \" + description\n    return description, eval_string, skip_unless",
+      "start_line": 46,
+      "end_line": 66,
+      "line_count": 21,
+      "is_async": false,
+      "is_method": false,
+      "return_type": "tuple[str, list[str], str]",
+      "parameters": [
+        "path",
+        "text"
+      ],
+      "dependencies": [
+        "groups",
+        "group",
+        "list",
+        "strip",
+        "search"
+      ],
+      "decorators": [],
+      "docstring": "Extract test data\n\nEach test case is an XML file which contains not only a test feed\nbut also the description of the test and the condition that we\nwould expect the parser to create when it parses the feed.  Example:\n<!--\nDescription: feed title\nExpect:      feed['title'] == 'Example feed'\n-->"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "greek"
+    },
+    "file": {
+      "name": "greek.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\greek.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_greek",
+      "signature": "def _parse_date_greek(date_string)",
+      "body": "def _parse_date_greek(date_string):\n    \"\"\"Parse a string according to a Greek 8-bit date format.\"\"\"\n    m = _greek_date_format_re.match(date_string)\n    if not m:\n        return\n    wday = _greek_wdays[m.group(1)]\n    month = _greek_months[m.group(3)]\n    rfc822date = (\n        \"%(wday)s, %(day)s %(month)s %(year)s %(hour)s:%(minute)s:%(second)s %(offset)s\"\n        % {\n            \"wday\": wday,\n            \"day\": m.group(2),\n            \"month\": month,\n            \"year\": m.group(4),\n            \"hour\": m.group(5),\n            \"minute\": m.group(6),\n            \"second\": m.group(7),\n            \"offset\": m.group(8),\n        }\n    )\n    return _parse_date_rfc822(rfc822date)",
+      "start_line": 70,
+      "end_line": 90,
+      "line_count": 21,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "date_string"
+      ],
+      "dependencies": [
+        "_parse_date_rfc822",
+        "match",
+        "group"
+      ],
+      "decorators": [],
+      "docstring": "Parse a string according to a Greek 8-bit date format."
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "_base"
+    },
+    "file": {
+      "name": "_base.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\namespaces\\_base.py"
+    },
+    "class": {
+      "name": "Namespace",
+      "fqn": "_base.Namespace"
+    },
+    "method": {
+      "name": "_start_rss",
+      "signature": "def _start_rss(self, attrs_d)",
+      "body": "def _start_rss(self, attrs_d):\n        versionmap = {\n            \"0.91\": \"rss091u\",\n            \"0.92\": \"rss092\",\n            \"0.93\": \"rss093\",\n            \"0.94\": \"rss094\",\n        }\n\n        # If we're here then this is an RSS feed.\n        # If we don't have a version or have a version that starts with something\n        # other than RSS then there's been a mistake. Correct it.\n        if not self.version or not self.version.startswith(\"rss\"):\n            attr_version = attrs_d.get(\"version\", \"\")\n            version = versionmap.get(attr_version)\n            if version:\n                self.version = version\n            elif attr_version.startswith(\"2.\"):\n                self.version = \"rss20\"\n            else:\n                self.version = \"rss\"",
+      "start_line": 60,
+      "end_line": 79,
+      "line_count": 20,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "attrs_d"
+      ],
+      "dependencies": [
+        "startswith",
+        "get"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "test_feedparser_dict"
+    },
+    "file": {
+      "name": "test_feedparser_dict.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\tests\\test_feedparser_dict.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "test_empty",
+      "signature": "def test_empty()",
+      "body": "def test_empty():\n    d = feedparser.util.FeedParserDict()\n    keys = (\n        \"a\",\n        \"entries\",\n        \"id\",\n        \"guid\",\n        \"summary\",\n        \"subtitle\",\n        \"description\",\n        \"category\",\n        \"enclosures\",\n        \"license\",\n        \"categories\",\n    )\n    for k in keys:\n        _check_no_key(k, d)\n    assert \"items\" not in d\n    assert hasattr(d, \"items\")",
+      "start_line": 16,
+      "end_line": 34,
+      "line_count": 19,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [],
+      "dependencies": [
+        "hasattr",
+        "FeedParserDict",
+        "_check_no_key"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "html"
+    },
+    "file": {
+      "name": "html.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\html.py"
+    },
+    "class": {
+      "name": "BaseHTMLProcessor",
+      "fqn": "html.BaseHTMLProcessor"
+    },
+    "method": {
+      "name": "handle_charref",
+      "signature": "def handle_charref(self, ref)",
+      "body": "def handle_charref(self, ref):\n        \"\"\"\n        :type ref: str\n        :rtype: None\n        \"\"\"\n\n        # Called for each character reference, e.g. '&#160;' will extract '160'\n        # Reconstruct the original character reference.\n        ref = ref.lower()\n        if ref.startswith(\"x\"):\n            value = int(ref[1:], 16)\n        else:\n            value = int(ref)\n\n        if value in _cp1252:\n            self.pieces.append(\"&#%s;\" % hex(ord(_cp1252[value]))[1:])\n        else:\n            self.pieces.append(\"&#%s;\" % ref)",
+      "start_line": 216,
+      "end_line": 233,
+      "line_count": 18,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "ref"
+      ],
+      "dependencies": [
+        "startswith",
+        "hex",
+        "int",
+        "append",
+        "lower",
+        "ord"
+      ],
+      "decorators": [],
+      "docstring": ":type ref: str\n:rtype: None"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "handle_entityref",
+      "signature": "def handle_entityref(self, ref)",
+      "body": "def handle_entityref(self, ref):\n        # Called for each entity reference, e.g. for '&copy;', ref is 'copy'\n        if not self.elementstack:\n            return\n        if ref in (\"lt\", \"gt\", \"quot\", \"amp\", \"apos\"):\n            text = \"&%s;\" % ref\n        elif ref in self.entities:\n            text = self.entities[ref]\n            if text.startswith(\"&#\") and text.endswith(\";\"):\n                return self.handle_entityref(text)\n        else:\n            try:\n                html.entities.name2codepoint[ref]\n            except KeyError:\n                text = \"&%s;\" % ref\n            else:\n                text = chr(html.entities.name2codepoint[ref]).encode(\"utf-8\")\n        self.elementstack[-1][2].append(text)",
+      "start_line": 379,
+      "end_line": 396,
+      "line_count": 18,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "ref"
+      ],
+      "dependencies": [
+        "handle_entityref",
+        "startswith",
+        "append",
+        "endswith",
+        "chr",
+        "encode"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "mixin"
+    },
+    "file": {
+      "name": "mixin.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\mixin.py"
+    },
+    "class": {
+      "name": "XMLParserMixin",
+      "fqn": "mixin.XMLParserMixin"
+    },
+    "method": {
+      "name": "track_namespace",
+      "signature": "def track_namespace(self, prefix, uri)",
+      "body": "def track_namespace(self, prefix, uri):\n        loweruri = uri.lower()\n        if not self.version:\n            if (prefix, loweruri) == (None, \"http://my.netscape.com/rdf/simple/0.9/\"):\n                self.version = \"rss090\"\n            elif loweruri == \"http://purl.org/rss/1.0/\":\n                self.version = \"rss10\"\n            elif loweruri == \"http://www.w3.org/2005/atom\":\n                self.version = \"atom10\"\n        if loweruri.find(\"backend.userland.com/rss\") != -1:\n            # match any backend.userland.com namespace\n            uri = \"http://backend.userland.com/rss\"\n            loweruri = uri\n        if loweruri in self._matchnamespaces:\n            self.namespacemap[prefix] = self._matchnamespaces[loweruri]\n            self.namespaces_in_use[self._matchnamespaces[loweruri]] = uri\n        else:\n            self.namespaces_in_use[prefix or \"\"] = uri",
+      "start_line": 445,
+      "end_line": 462,
+      "line_count": 18,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "self",
+        "prefix",
+        "uri"
+      ],
+      "dependencies": [
+        "lower",
+        "find"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "urls"
+    },
+    "file": {
+      "name": "urls.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\urls.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "make_safe_absolute_uri",
+      "signature": "def make_safe_absolute_uri(base, rel=None)",
+      "body": "def make_safe_absolute_uri(base, rel=None):\n    # bail if ACCEPTABLE_URI_SCHEMES is empty\n    if not ACCEPTABLE_URI_SCHEMES:\n        return _urljoin(base, rel or \"\")\n    if not base:\n        return rel or \"\"\n    if not rel:\n        try:\n            scheme = urllib.parse.urlparse(base)[0]\n        except ValueError:\n            return \"\"\n        if not scheme or scheme in ACCEPTABLE_URI_SCHEMES:\n            return base\n        return \"\"\n    uri = _urljoin(base, rel)\n    if uri.strip().split(\":\", 1)[0] not in ACCEPTABLE_URI_SCHEMES:\n        return \"\"\n    return uri",
+      "start_line": 99,
+      "end_line": 116,
+      "line_count": 18,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "base",
+        "rel"
+      ],
+      "dependencies": [
+        "split",
+        "strip",
+        "_urljoin",
+        "urlparse"
+      ],
+      "decorators": [],
+      "docstring": null
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "korean"
+    },
+    "file": {
+      "name": "korean.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\datetimes\\korean.py"
+    },
+    "class": {
+      "name": null,
+      "fqn": null
+    },
+    "method": {
+      "name": "_parse_date_onblog",
+      "signature": "def _parse_date_onblog(dateString)",
+      "body": "def _parse_date_onblog(dateString):\n    \"\"\"Parse a string according to the OnBlog 8-bit date format\"\"\"\n    m = _korean_onblog_date_re.match(dateString)\n    if not m:\n        return\n    w3dtfdate = (\n        \"%(year)s-%(month)s-%(day)sT%(hour)s:%(minute)s:%(second)s%(zonediff)s\"\n        % {\n            \"year\": m.group(1),\n            \"month\": m.group(2),\n            \"day\": m.group(3),\n            \"hour\": m.group(4),\n            \"minute\": m.group(5),\n            \"second\": m.group(6),\n            \"zonediff\": \"+09:00\",\n        }\n    )\n    return _parse_date_w3dtf(w3dtfdate)",
+      "start_line": 50,
+      "end_line": 67,
+      "line_count": 18,
+      "is_async": false,
+      "is_method": false,
+      "return_type": null,
+      "parameters": [
+        "dateString"
+      ],
+      "dependencies": [
+        "match",
+        "_parse_date_w3dtf",
+        "group"
+      ],
+      "decorators": [],
+      "docstring": "Parse a string according to the OnBlog 8-bit date format"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  },
+  {
+    "project": {
+      "name": "html"
+    },
+    "file": {
+      "name": "html.py",
+      "path": "E:\\Masaüstü\\yapayzeka\\project\\ERUNeuraTest\\benchmark\\feedparser\\feedparser\\html.py"
+    },
+    "class": {
+      "name": "BaseHTMLProcessor",
+      "fqn": "html.BaseHTMLProcessor"
+    },
+    "method": {
+      "name": "normalize_attrs",
+      "signature": "def normalize_attrs(attrs)",
+      "body": "def normalize_attrs(attrs):\n        \"\"\"\n        :type attrs: List[Tuple[str, str]]\n        :rtype: List[Tuple[str, str]]\n        \"\"\"\n\n        if not attrs:\n            return attrs\n        # utility method to be called by descendants\n        # Collapse any duplicate attribute names and values by converting\n        # *attrs* into a dictionary, then convert it back to a list.\n        attrs_d = {k.lower(): v for k, v in attrs}\n        attrs = [\n            (k, k in (\"rel\", \"type\") and v.lower() or v) for k, v in attrs_d.items()\n        ]\n        attrs.sort()\n        return attrs",
+      "start_line": 162,
+      "end_line": 178,
+      "line_count": 17,
+      "is_async": false,
+      "is_method": true,
+      "return_type": null,
+      "parameters": [
+        "attrs"
+      ],
+      "dependencies": [
+        "lower",
+        "sort",
+        "items"
+      ],
+      "decorators": [
+        "staticmethod"
+      ],
+      "docstring": ":type attrs: List[Tuple[str, str]]\n:rtype: List[Tuple[str, str]]"
+    },
+    "complexity": {
+      "cyclomatic_complexity": 1,
+      "cognitive_complexity": 0,
+      "risk_levels": {
+        "overall_risk": "LOW"
+      }
+    }
+  }
+]
