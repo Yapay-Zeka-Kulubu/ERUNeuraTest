@@ -22,11 +22,11 @@ class ValidationResult:
         self.errors = errors if errors is not None else []
         self.warnings = warnings if warnings is not None else []
 
-    def add_errors(self, message):
+    def add_error(self, message):
         self.errors.append(message)
         self.is_valid = False
 
-    def add_warnings(self, message):
+    def add_warning(self, message):
         self.warnings.append(message)
 
     def merge(self, other):
@@ -91,7 +91,7 @@ class CodeValidator:
             column = e.offset if e.offset is not None else "unknown"
             message = e.msg if e.msg else "invalid syntax"
 
-            result.add_errors(
+            result.add_error(
             f"SyntaxError at line {line}, column {column}: {message}"
         )
         return result
@@ -102,7 +102,7 @@ class CodeValidator:
         try:
             tree = ast.parse(code)
         except SyntaxError: 
-            result.add_errors("Import validation skipped because syntax is invalid.")
+            result.add_error("Import validation skipped because syntax is invalid.")
             return result    
 
         imported_modules, imported_names = self._collect_imports(tree)
@@ -115,7 +115,7 @@ class CodeValidator:
         )
 
         for message in missing_messages:
-            result.add_warnings(message)
+            result.add_warning(message)
 
         return result
     
@@ -133,12 +133,12 @@ class CodeValidator:
         ]
 
         if not test_functions:
-            result.add_warnings(
+            result.add_warning(
                 "No test function found. Expected at least one function starting with 'test_'."
             )
 
         if "assert" not in code and "pytest.raises" not in code:
-            result.add_warnings(
+            result.add_warning(
                 "No assertion pattern found. Test code may be incomplete."
             )
 
