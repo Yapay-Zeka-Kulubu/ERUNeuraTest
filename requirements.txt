@@ -7,7 +7,6 @@ pytest==7.4.3
 huggingface-hub>=0.19.4
 
 # Formatting / Testing Tools
-autopep8
 black
 isort
 coverage
