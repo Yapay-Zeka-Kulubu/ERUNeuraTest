@@ -8,3 +8,7 @@ huggingface-hub>=0.19.4
 radon
 cognitive-complexity
 
+# Formatting / Testing Tools
+black
+isort
+coverage
