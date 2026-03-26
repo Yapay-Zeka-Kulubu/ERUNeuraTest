@@ -1,6 +1,8 @@
 # Sample Python file for testing
 def factorial(n: int) -> int:
     """Calculate factorial of n."""
+    if not isinstance(n, int):
+        raise TypeError("n must be an integer")
     if n < 0:
         raise ValueError("n must be non-negative")
     if n == 0 or n == 1:
